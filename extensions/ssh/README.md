@@ -1,6 +1,7 @@
 # SSH
 
-Reuse SSH profiles and OpenSSH ControlMaster connections across pi sessions.
+Reuse SSH profiles and OpenSSH ControlMaster connections on non-Windows platforms.
+Windows OpenSSH does not support client ControlMaster, so each command opens its own connection there.
 The remote host needs a POSIX shell, `cat`, `dd`, `mktemp`, `ps`, `awk`, `wc`, and `tr`. Authentication uses the system
 SSH client and agent. Batch mode prevents password prompts.
 
@@ -62,9 +63,10 @@ no user, identity file, jump host, or cwd; ControlPersist is 600 seconds.
 `options` maps OpenSSH option names to string values. Connection multiplexing,
 stdin, session type, remote command, and batch settings are extension-managed.
 Config files use mode 0600 on Unix. Socket directories use mode 0700.
-Sockets live under `<agentDir>/ext/ssh/sockets/` and use a connection hash;
+On non-Windows platforms, sockets live under `<agentDir>/ext/ssh/sockets/` and use a connection hash;
 changing host, user, port, identity, jump host, or options selects a new socket.
 SSH runs from the socket directory with a relative ControlPath, so long agent
 paths fit the Unix socket path limit. Use absolute paths for local identity
 files and paths in SSH options. Disconnect closes the shared master connection,
-including other sessions that use that connection.
+including other sessions that use that connection. Windows has no shared master
+connection to disconnect.
