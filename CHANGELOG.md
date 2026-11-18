@@ -2,6 +2,12 @@
 
 All notable changes to pi-rust-extensions are documented here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, breaking changes bump the minor version.
 
+## [0.5.16] - 2026-11-18
+
+### Added
+
+- **subscription-router:** /router menu, model access per account, indicator settings ([5c34b2c](https://github.com/yannelli/pi-rust-extensions/commit/5c34b2c172b0a8f672206c7e9f21f0d0dda78069))
+
 ## [0.5.15] - 2026-11-11
 
 ### Added
