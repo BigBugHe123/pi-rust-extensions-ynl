@@ -16,7 +16,7 @@ pub async fn status(state: &State, host: &Host) -> Result<()> {
     host.set_status("ssh", text.as_deref()).await
 }
 
-async fn remote(state: &State, host: &Host, name: Option<String>) -> Result<()> {
+pub async fn set_remote(state: &State, host: &Host, name: Option<String>) -> Result<()> {
     if let Some(name) = &name {
         command::profile(&config::load(host, &state.warned).await?, name)?;
     }
@@ -142,8 +142,8 @@ pub async fn manage(state: &State, args: &str, ctx: CommandCtx) -> Result<()> {
     let host = ctx.host();
     let (action, name) = args.trim().split_once(' ').unwrap_or((args.trim(), ""));
     match action {
-        "off" => return remote(state, host, None).await,
-        "remote" => return remote(state, host, Some(name.trim().into())).await,
+        "off" => return set_remote(state, host, None).await,
+        "remote" => return set_remote(state, host, Some(name.trim().into())).await,
         "connect" | "disconnect" | "test" => {
             return connection(state, &ctx, name.trim(), action).await;
         }
@@ -173,7 +173,7 @@ pub async fn manage(state: &State, args: &str, ctx: CommandCtx) -> Result<()> {
         };
         match index {
             0 => edit(state, host, None).await?,
-            1 => return remote(state, host, None).await,
+            1 => return set_remote(state, host, None).await,
             _ => {
                 let name = names[index - 2];
                 let actions = [
@@ -193,7 +193,7 @@ pub async fn manage(state: &State, args: &str, ctx: CommandCtx) -> Result<()> {
                     "Test" => connection(state, &ctx, name, "test").await?,
                     "Connect" => connection(state, &ctx, name, "connect").await?,
                     "Disconnect" => connection(state, &ctx, name, "disconnect").await?,
-                    "Use for bash" => return remote(state, host, Some(name.clone())).await,
+                    "Use for bash" => return set_remote(state, host, Some(name.clone())).await,
                     "Enable or disable" => modify(state, host, name, false).await?,
                     "Delete" => modify(state, host, name, true).await?,
                     _ => {}

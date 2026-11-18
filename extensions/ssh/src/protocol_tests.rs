@@ -79,7 +79,7 @@ async fn profiles_trust_remote_mode_and_session_replay() {
                 let result = &message["result"];
                 match id {
                     1 => {
-                        assert_eq!(result["tools"].as_array().unwrap().len(), 4);
+                        assert_eq!(result["tools"].as_array().unwrap().len(), 6);
                         assert_eq!(result["commands"][0]["name"], "ssh");
                     }
                     2 => assert_eq!(result["details"]["profiles"][0]["host"], "global-host"),

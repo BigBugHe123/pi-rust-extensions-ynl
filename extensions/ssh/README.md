@@ -11,6 +11,8 @@ SSH client and agent. Batch mode prevents password prompts.
 - `ssh_read`: `profile`, `path`, optional `timeout`. Reads a UTF-8 file.
 - `ssh_write`: `profile`, `path`, `content`, optional `timeout`. Writes a UTF-8 file.
 - `ssh_profiles`: lists profiles, enabled state, and the session's remote profile.
+- `ssh_use_profile`: routes this session's built-in `bash` to a configured profile.
+- `ssh_use_local_bash`: restores local `bash` for this session.
 - `/ssh`: list, add, edit, enable, disable, delete, test, connect, and disconnect
   profiles. The editor exposes all profile fields. Changes select global or
   project scope.
@@ -20,6 +22,10 @@ SSH client and agent. Batch mode prevents password prompts.
 
 Remote mode displays the active host in a footer status. It persists in
 `ssh-remote` session entries and replays on session changes and compaction.
+A user can request the switch in natural language; the agent calls
+`ssh_use_profile` with the configured profile name. To return to the local
+machine, ask the agent to switch bash back to local, which calls
+`ssh_use_local_bash`.
 A missing or disabled remote profile blocks bash until the user changes modes.
 The built-in bash timeout controls commands in remote mode. Other built-in file
 tools remain local; use `ssh_read` and `ssh_write` for remote files.
