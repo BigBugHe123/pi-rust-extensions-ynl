@@ -3,6 +3,7 @@
 //! fallback to other providers, and `router/<profile>` virtual models. On pi without the
 //! `providerAuth` feature the accounts are provider slots (`anthropic-2`) with copied models.
 
+pub mod access;
 pub mod accounts;
 pub mod commands;
 pub mod config;
@@ -143,7 +144,7 @@ pub fn extension(state: Arc<State>) -> Extension {
     })
     .command(
         "router",
-        "Subscription router: status (default), refresh, reset, manage, accounts, profiles, add",
+        "Subscription router: the menu (default), status, refresh, reset, accounts, profiles, add, indicator",
         move |args, ctx| commands::router(s2.clone(), args, ctx),
     )
     .completions("router", |prefix, _host| async move {

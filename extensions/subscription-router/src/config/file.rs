@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
-use super::{AccountPolicy, CONFIG_ENV, ChainEntry, Config, Policy, Profile, parse_config};
+use super::{
+    AccountPolicy, CONFIG_ENV, ChainEntry, Config, Indicator, Policy, Profile, parse_config,
+};
 use crate::family::parse_provider;
 
 /// A chain or fallback entry; a model on another account is `{ model: "anthropic/x", account: 2 }`.
@@ -46,6 +48,31 @@ pub fn policy_json(policy: &AccountPolicy) -> Value {
     value
 }
 
+/// The keys that differ from the defaults.
+pub fn indicator_json(indicator: &Indicator) -> Value {
+    let defaults = Indicator::default();
+    let mut value = json!({});
+    if indicator.show != defaults.show {
+        value["show"] = json!(indicator.show);
+    }
+    if indicator.percent != defaults.percent {
+        value["percent"] = json!(indicator.percent.as_str());
+    }
+    if indicator.window != defaults.window {
+        value["window"] = json!(indicator.window.as_str());
+    }
+    if indicator.reset != defaults.reset {
+        value["reset"] = json!(indicator.reset);
+    }
+    if indicator.all_accounts {
+        value["accounts"] = json!("all");
+    }
+    if indicator.strategy != defaults.strategy {
+        value["strategy"] = json!(indicator.strategy);
+    }
+    value
+}
+
 pub fn profile_json(profile: &Profile) -> Value {
     let chain: Vec<Value> = profile.chain.iter().map(entry_json).collect();
     let mut value = json!({ "name": profile.name, "chain": chain });
@@ -83,6 +110,9 @@ pub fn config_json(config: &Config) -> Value {
             .map(|(provider, policy)| (provider.to_string(), policy_json(policy)))
             .collect();
         value["accounts"] = json!(accounts);
+    }
+    if config.indicator != Indicator::default() {
+        value["indicator"] = indicator_json(&config.indicator);
     }
     value
 }

@@ -9,7 +9,7 @@ use crate::family::{Family, parse_provider};
 use crate::fsutil::now_ms;
 
 const ANTHROPIC_BETA: &str = "oauth-2025-04-20";
-const ANTHROPIC_USER_AGENT: &str = "claude-code/2.1";
+pub const ANTHROPIC_USER_AGENT: &str = "claude-code/2.1";
 
 impl UsageService {
     pub(super) async fn fetch(

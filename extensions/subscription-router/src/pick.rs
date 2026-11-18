@@ -10,6 +10,7 @@ use std::sync::{Arc, LazyLock};
 use pi_ext_sdk::prelude::*;
 use regex::Regex;
 
+use crate::access::{eligible_ids, model_missing};
 use crate::config::{AccountPolicy, AccountStrategy, ChainEntry, ModelRef, ResetUse, Strategy};
 use crate::failover::switch_to;
 use crate::family::{Family, parse_provider};
@@ -117,16 +118,18 @@ pub fn full_until(
         .max()
 }
 
+/// Every account that has model `id` is full.
 pub fn all_full(state: &State, family: Family, id: &str, now: i64) -> bool {
     let full_at = state.config().policy(family).full_at();
-    account_ids(state, family)
+    eligible_ids(state, family, id, now)
         .into_iter()
         .all(|slot| full_until(state, family, slot, id, full_at, now).is_some())
 }
 
-/// The account for the next request of model `id`: a routed or pinned account, else the policy.
+/// The account for the next request of model `id`: a routed or pinned account, else the policy,
+/// among the accounts that have the model.
 pub fn choose(state: &State, family: Family, id: &str, now: i64) -> u32 {
-    let ids = account_ids(state, family);
+    let ids = eligible_ids(state, family, id, now);
     let policy = state.config().policy(family);
     let (routed, pinned, current) = {
         let picks = lock(&state.picks);
@@ -167,7 +170,7 @@ fn by_policy(
     let free = |slot: u32| full_until(state, family, slot, id, full_at, now).is_none();
     match policy.strategy {
         AccountStrategy::Manual if ids.contains(&policy.account) => policy.account,
-        AccountStrategy::Manual => 1,
+        AccountStrategy::Manual => ids[0],
         AccountStrategy::Fill | AccountStrategy::Threshold => {
             let start = current.unwrap_or(ids[0]);
             if free(start) {
@@ -229,18 +232,30 @@ pub async fn on_auth(host: Host, state: Arc<State>, event: Value) -> Result<Even
     })
 }
 
-/// The failed assistant message of a limit error on a subscription model, with its model id.
-fn limit_error(message: &Value, status: Option<u64>) -> Option<(Family, String)> {
+/// A failed assistant message of a subscription model: its provider, model id, and error.
+fn failed_request(message: &Value) -> Option<(Family, String, String)> {
     let get = |k: &str| message.get(k).and_then(Value::as_str);
     if get("role") != Some("assistant") || get("stopReason") != Some("error") {
         return None;
     }
-    let error = get("errorMessage").unwrap_or_default();
-    if status != Some(429) && !HTTP_429.is_match(error) && !QUOTA.is_match(error) {
-        return None;
-    }
     let (family, slot) = parse_provider(get("provider")?)?;
-    (slot == 1).then(|| (family, get("model").unwrap_or_default().to_owned()))
+    let (id, error) = (get("model").unwrap_or_default(), get("errorMessage"));
+    (slot == 1).then(|| (family, id.to_owned(), error.unwrap_or_default().to_owned()))
+}
+
+/// The failed assistant message of a limit error on a subscription model, with its model id.
+fn limit_error(message: &Value, status: Option<u64>) -> Option<(Family, String)> {
+    let (family, id, error) = failed_request(message)?;
+    let limit = status == Some(429) || HTTP_429.is_match(&error) || QUOTA.is_match(&error);
+    limit.then_some((family, id))
+}
+
+/// The account the last request went to, when it was for model `id` of `family`.
+fn last_account(state: &State, family: Family, id: &str) -> Option<u32> {
+    match lock(&state.picks).last.clone() {
+        Some((f, slot, last_id)) if f == family && last_id == id => Some(slot),
+        _ => None,
+    }
 }
 
 /// A retryable error for pi's retry: `HTTP 429` without the words pi treats as final.
@@ -290,15 +305,12 @@ pub async fn on_message_end(host: Host, state: Arc<State>, event: Value) -> Resu
     };
     let message = event.get("message").cloned().unwrap_or(Value::Null);
     let Some((family, id)) = limit_error(&message, status) else {
-        return Ok(EventReply::none());
+        return without_model(&host, &state, &message, status).await;
     };
     if !state.config().auto_switch_on_429 {
         return Ok(EventReply::none());
     }
-    let slot = match lock(&state.picks).last.clone() {
-        Some((f, slot, last_id)) if f == family && last_id == id => slot,
-        _ => 1,
-    };
+    let slot = last_account(&state, family, &id).unwrap_or(1);
     let now = now_ms();
     let until = confirm_full(&host, &state, family, slot, &id)
         .await
@@ -334,13 +346,51 @@ pub async fn on_message_end(host: Host, state: Arc<State>, event: Value) -> Resu
             json!({ "message": retry_message(&message, &reason) }),
         ));
     }
-    let first_free = account_ids(&state, family)
+    let first_free = eligible_ids(&state, family, &id, now)
         .into_iter()
         .filter_map(|s| full_until(&state, family, s, &id, policy.full_at(), now))
         .min();
     Ok(EventReply::result(json!({
         "message": exhausted_message(&message, family, first_free, now)
     })))
+}
+
+/// `message_end` of a request the account cannot serve because it lacks the model: the model
+/// stays off that account when another account has it, and pi retries there.
+async fn without_model(
+    host: &Host,
+    state: &Arc<State>,
+    message: &Value,
+    status: Option<u64>,
+) -> Result<EventReply> {
+    let Some((family, id, error)) = failed_request(message) else {
+        return Ok(EventReply::none());
+    };
+    if !model_missing(&error, status, &id) {
+        return Ok(EventReply::none());
+    }
+    let Some(slot) = last_account(state, family, &id) else {
+        return Ok(EventReply::none());
+    };
+    let now = now_ms();
+    let provider = family.provider(slot);
+    state.models.deny(&provider, &id, now);
+    if eligible_ids(state, family, &id, now).contains(&slot) {
+        state.models.allow(&provider, &id);
+        return Ok(EventReply::none());
+    }
+    if !state.config().auto_switch_on_429 {
+        return Ok(EventReply::none());
+    }
+    let next = choose(state, family, &id, now);
+    let (failed, next) = (account_name(family, slot), account_name(family, next));
+    let notice = format!("{failed} cannot use {id}. Retrying on {next}.");
+    host.notify_warning(notice).await.ok();
+    crate::status::update(host, state).await;
+    let reason = format!("{failed} cannot use {id}; retrying on {next}");
+    Ok(EventReply::result(
+        json!({ "message": retry_message(message, &reason) }),
+    ))
 }
 
 /// Every account of `family` is full: spend a reset (`when-all-full`), else fall back to another
@@ -354,7 +404,7 @@ async fn when_all_full(
     let policy = state.config().policy(family);
     let now = now_ms();
     if policy.use_resets == ResetUse::WhenAllFull {
-        let mut accounts: Vec<(u32, i64)> = account_ids(state, family)
+        let mut accounts: Vec<(u32, i64)> = eligible_ids(state, family, id, now)
             .into_iter()
             .filter_map(|s| Some((s, full_until(state, family, s, id, 100.0, now)?)))
             .filter(|(_, until)| crate::resets::worth(&policy, *until, now))
@@ -412,7 +462,7 @@ async fn fall_back(host: &Host, state: &Arc<State>, entry: &ChainEntry) -> Optio
         return None;
     }
     if let Some((family, slot)) = account {
-        if !account_ids(state, family).contains(&slot) {
+        if !eligible_ids(state, family, &target.id, now).contains(&slot) {
             return None;
         }
         let full_at = state.config().policy(family).full_at();

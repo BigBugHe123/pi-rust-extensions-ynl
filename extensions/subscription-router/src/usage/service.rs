@@ -114,12 +114,17 @@ impl UsageService {
         self.inner.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// Cached snapshot without a network read; expired data comes back `stale`.
-    /// The Codex usage endpoint; the reset endpoints sit beside it.
+    /// The Codex usage endpoint; the reset and model list endpoints sit beside it.
     pub fn codex_url(&self) -> &str {
         &self.urls.codex
     }
 
+    /// The Anthropic usage endpoint; the model list endpoint is on the same host.
+    pub fn anthropic_url(&self) -> &str {
+        &self.urls.anthropic
+    }
+
+    /// Cached snapshot without a network read; expired data comes back `stale`.
     pub fn peek(&self, provider: &str) -> Option<UsageSnapshot> {
         let cached = self.lock().cache.get(provider).cloned()?;
         let now = now_ms();

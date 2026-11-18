@@ -6,7 +6,7 @@ use pi_ext_sdk::prelude::*;
 
 use super::index_of;
 use crate::family::Family;
-use crate::fsutil::now_ms;
+use crate::fsutil::{duration, now_ms};
 use crate::slots::{SlotInfo, status_line};
 use crate::state::{HostTokens, State, current_model};
 use crate::usage::{GetOptions, format};
@@ -94,6 +94,7 @@ async fn remove(host: &Host, state: &Arc<State>, family: Family, slot: u32) -> R
     host.unregister_provider(&provider).await?;
     state.accounts.remove(&provider).await?;
     state.usage().forget(&provider);
+    state.models.forget(&provider);
     state.router.tracker().clear_provider(&provider);
     let current = current_model(host).is_some_and(|m| m.provider == provider);
     let suffix = if current {
@@ -113,12 +114,13 @@ async fn view(
     refresh: bool,
 ) -> Result<()> {
     let provider = family.provider(slot);
+    let tokens = HostTokens { host, state };
     let snapshot = if refresh {
-        let tokens = HostTokens { host, state };
         let options = GetOptions {
             force: true,
             ..Default::default()
         };
+        crate::access::refresh(state, &tokens, &provider, true).await;
         Some(state.usage().get(&provider, &tokens, options).await)
     } else {
         state.usage().peek(&provider)
@@ -128,10 +130,26 @@ async fn view(
         slot,
         snapshot: snapshot.clone(),
     };
-    let lines = [
-        status_line(&info, now_ms()),
+    let now = now_ms();
+    let mut lines = vec![
+        status_line(&info, now),
         format!("{provider}: {}", format(snapshot.as_ref())),
+        match state.models.list(&provider) {
+            Some(list) => format!(
+                "models: {} listed, read {} ago",
+                list.models.len(),
+                duration(now - list.read_at)
+            ),
+            None => "models: list not read; the router tries every model here".into(),
+        },
     ];
+    let denied = state.models.denied(&provider, now);
+    if !denied.is_empty() {
+        lines.push(format!(
+            "not used after a failed request: {}",
+            denied.join(", ")
+        ));
+    }
     host.notify_info(lines.join("\n")).await
 }
 

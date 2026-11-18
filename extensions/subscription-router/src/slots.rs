@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use crate::config::{Indicator, IndicatorPercent, IndicatorWindow};
 use crate::family::Family;
 use crate::fsutil::duration;
 use crate::usage::{
@@ -121,23 +122,89 @@ fn shown_reset(snapshot: &UsageSnapshot, now: i64) -> Option<(&'static str, i64)
     }
 }
 
+/// The reset the indicator shows for `window`, with its label.
+fn window_reset(
+    snapshot: &UsageSnapshot,
+    now: i64,
+    window: IndicatorWindow,
+) -> Option<(&'static str, i64)> {
+    let of = |label, duration| {
+        let reset = provider_window(snapshot, duration)?.reset_at?;
+        (reset > now).then_some((label, reset))
+    };
+    match window {
+        IndicatorWindow::Auto => shown_reset(snapshot, now),
+        IndicatorWindow::FiveHour => of("5h", FIVE_HOURS_MS),
+        IndicatorWindow::Week => of("7d", SEVEN_DAYS_MS),
+    }
+}
+
+/// `63%` left or `37% used` of the indicator's window; `auto` reads the weekly window.
+fn percent_text(snapshot: &UsageSnapshot, indicator: &Indicator) -> String {
+    let left_of = |duration| {
+        let window = provider_window(snapshot, duration)?;
+        Some((100.0 - window.used_percent).clamp(0.0, 100.0))
+    };
+    let left = match indicator.window {
+        IndicatorWindow::Auto => remaining(snapshot),
+        IndicatorWindow::FiveHour => left_of(FIVE_HOURS_MS),
+        IndicatorWindow::Week => left_of(SEVEN_DAYS_MS),
+    };
+    match (left, indicator.percent) {
+        (Some(left), IndicatorPercent::Left) => format!("{}%", percent(left)),
+        (Some(left), IndicatorPercent::Used) => format!("{}% used", percent(100.0 - left)),
+        (None, IndicatorPercent::Left) => "?%".into(),
+        (None, IndicatorPercent::Used) => "?% used".into(),
+    }
+}
+
 /// Footer text: `Codex #2 · 63% · 7d 2d 4h`, `· 5h limit · 1h 2m`, `· stale`, `· unavailable`.
 pub fn status_text(info: &SlotInfo, now: i64) -> String {
+    indicator_text(info, now, &Indicator::default())
+}
+
+/// Footer text of the account in use, as `indicator` sets it. A named window leads the percent:
+/// `Codex #2 · 5h 80% · 1h 2m`.
+pub fn indicator_text(info: &SlotInfo, now: i64, indicator: &Indicator) -> String {
     let prefix = info.name();
     let Some(snapshot) = info.snapshot.as_ref().filter(|s| s.measured()) else {
         return format!("{prefix} · unavailable");
     };
     if let Some(until) = short_limited_until(snapshot, now) {
-        return format!("{prefix} · 5h limit · {}", duration(until - now));
+        return match indicator.reset {
+            true => format!("{prefix} · 5h limit · {}", duration(until - now)),
+            false => format!("{prefix} · 5h limit"),
+        };
     }
     if !is_fresh(snapshot, now) {
         return format!("{prefix} · stale");
     }
-    let left = remaining(snapshot).map_or("?".into(), percent);
-    match shown_reset(snapshot, now) {
-        Some((label, reset)) => format!("{prefix} · {left}% · {label} {}", duration(reset - now)),
-        None => format!("{prefix} · {left}%"),
+    let percent = percent_text(snapshot, indicator);
+    let reset = window_reset(snapshot, now, indicator.window).filter(|_| indicator.reset);
+    let percent = match indicator.window {
+        IndicatorWindow::Auto => percent,
+        window => format!("{} {percent}", window.as_str()),
+    };
+    match (indicator.window, reset) {
+        (_, None) => format!("{prefix} · {percent}"),
+        (IndicatorWindow::Auto, Some((label, at))) => {
+            format!("{prefix} · {percent} · {label} {}", duration(at - now))
+        }
+        (_, Some((_, at))) => format!("{prefix} · {percent} · {}", duration(at - now)),
     }
+}
+
+/// An account after the one in use: `#1 12%`, `#3 5h limit`, or `#2 ?` without fresh usage.
+pub fn compact_text(info: &SlotInfo, now: i64, indicator: &Indicator) -> String {
+    let name = format!("#{}", info.slot);
+    let fresh = info.snapshot.as_ref();
+    let Some(snapshot) = fresh.filter(|s| s.measured() && is_fresh(s, now)) else {
+        return format!("{name} ?");
+    };
+    if short_limited_until(snapshot, now).is_some() {
+        return format!("{name} 5h limit");
+    }
+    format!("{name} {}", percent_text(snapshot, indicator))
 }
 
 /// One line for `/codex-status` and the account list.

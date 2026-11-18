@@ -1,34 +1,62 @@
-//! The `subscription-router` footer status: slot, percent left, and reset countdown.
+//! The `subscription-router` footer status: account, quota, and reset countdown, as the
+//! `indicator` config sets them.
 
 use pi_ext_sdk::Host;
 
 use crate::config::{ModelRef, ROUTER_PROVIDER};
 use crate::family::parse_provider;
 use crate::fsutil::now_ms;
-use crate::slots::{SlotInfo, status_text};
+use crate::slots::{SlotInfo, compact_text, indicator_text};
 use crate::state::{State, current_model, lock};
 
 pub const STATUS_KEY: &str = "subscription-router";
 
 fn slot_text(state: &State, model: &ModelRef) -> Option<String> {
     let (family, mut slot) = parse_provider(&model.provider)?;
-    if slot == 1 && crate::pick::enabled(state) {
+    let accounts = crate::pick::enabled(state);
+    if slot == 1 && accounts {
         slot = crate::pick::status_slot(state, family);
     }
-    let model = &ModelRef::new(family.provider(slot), &model.id);
-    let snapshot = state.usage().peek(&model.provider);
-    Some(status_text(
-        &SlotInfo {
+    let config = state.config();
+    let indicator = &config.indicator;
+    let now = now_ms();
+    let slots = state.slots(family);
+    let current = slots
+        .iter()
+        .find(|info| info.slot == slot)
+        .cloned()
+        .unwrap_or_else(|| SlotInfo {
             family,
             slot,
-            snapshot,
-        },
-        now_ms(),
-    ))
+            snapshot: state.usage().peek(&family.provider(slot)),
+        });
+    let mut text = indicator_text(&current, now, indicator);
+    if indicator.strategy && accounts {
+        let pinned = lock(&state.picks).pinned.contains_key(&family);
+        let how = match pinned {
+            true => "pinned",
+            false => config.policy(family).strategy.as_str(),
+        };
+        text.push_str(&format!(" · {how}"));
+    }
+    if indicator.all_accounts {
+        for info in slots.iter().filter(|info| info.slot != slot) {
+            let other = match state.models.lacks(&info.provider(), &model.id, now) {
+                true => format!("#{} no access", info.slot),
+                false => compact_text(info, now, indicator),
+            };
+            text.push_str(&format!(" | {other}"));
+        }
+    }
+    Some(text)
 }
 
+/// The footer text for `current`; `None` hides it.
 pub fn text(state: &State, current: Option<&ModelRef>) -> Option<String> {
     let current = current?;
+    if !state.config().indicator.show {
+        return None;
+    }
     if current.provider != ROUTER_PROVIDER {
         let text = slot_text(state, current);
         let from = lock(&state.picks).fallback_from.clone();
