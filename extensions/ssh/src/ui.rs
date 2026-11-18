@@ -173,7 +173,7 @@ pub async fn manage(state: &State, args: &str, ctx: CommandCtx) -> Result<()> {
         };
         match index {
             0 => edit(state, host, None).await?,
-            1 => remote(state, host, None).await?,
+            1 => return remote(state, host, None).await,
             _ => {
                 let name = names[index - 2];
                 let actions = [
@@ -193,7 +193,7 @@ pub async fn manage(state: &State, args: &str, ctx: CommandCtx) -> Result<()> {
                     "Test" => connection(state, &ctx, name, "test").await?,
                     "Connect" => connection(state, &ctx, name, "connect").await?,
                     "Disconnect" => connection(state, &ctx, name, "disconnect").await?,
-                    "Use for bash" => remote(state, host, Some(name.clone())).await?,
+                    "Use for bash" => return remote(state, host, Some(name.clone())).await,
                     "Enable or disable" => modify(state, host, name, false).await?,
                     "Delete" => modify(state, host, name, true).await?,
                     _ => {}
