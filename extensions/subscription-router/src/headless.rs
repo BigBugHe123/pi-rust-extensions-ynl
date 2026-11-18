@@ -191,6 +191,7 @@ async fn finish(host: &Host, state: &Arc<State>, id: &str, pasted: &str) -> Resu
         return fail(host, format!("cannot save the account: {err}")).await;
     }
     state.usage().forget(&account.provider);
+    state.models.forget(&account.provider);
     if let Err(err) = crate::providers::register(host, state, &account).await {
         pi_ext_sdk::warn!("cannot register {}: {err}", account.provider);
     }
@@ -223,6 +224,7 @@ pub async fn remove(host: &Host, state: &Arc<State>, args: &str) -> Result<()> {
     host.unregister_provider(provider).await.ok();
     let removed = state.accounts.remove(provider).await?;
     state.usage().forget(provider);
+    state.models.forget(provider);
     state.router.tracker().clear_provider(provider);
     if let Some((family, slot)) = parse_provider(provider) {
         let mut picks = lock(&state.picks);

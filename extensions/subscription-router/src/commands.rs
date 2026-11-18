@@ -14,14 +14,20 @@ use crate::slots::status_line;
 use crate::state::{HostEnv, HostTokens, State, current_model, lock};
 use crate::usage::{GetOptions, format};
 
-pub const ACTIONS: [(&str, &str); 12] = [
+pub const ACTIONS: [(&str, &str); 13] = [
     (
         "status",
         "cached usage, each profile's pick, and recent decisions",
     ),
-    ("refresh", "read usage now, then show status"),
-    ("reset", "clear confirmed exhaustion blocks"),
-    ("manage", "accounts and profiles menu"),
+    (
+        "refresh",
+        "read usage and model lists now, then show status",
+    ),
+    (
+        "reset",
+        "clear confirmed exhaustion blocks and failed account models",
+    ),
+    ("manage", "the menu that /router opens"),
     ("accounts", "list, add, log in, remove, or switch slots"),
     ("profiles", "create, edit, or delete router profiles"),
     ("add", "add a Codex or Anthropic account and log in"),
@@ -34,6 +40,7 @@ pub const ACTIONS: [(&str, &str); 12] = [
         "how a provider picks accounts, falls back, and uses resets",
     ),
     ("resets", "banked Codex usage resets; resets <n> spends one"),
+    ("indicator", "what the footer status shows"),
     (
         "login",
         "add an account without dialogs: login start <claude|codex>, then login finish <id> <code>",
@@ -55,9 +62,15 @@ pub fn completions(prefix: &str) -> Option<Vec<CompletionItem>> {
 
 /// The `/router status` text: usage per provider, profile forecasts, and the last decisions.
 pub async fn status_report(host: &Host, state: &Arc<State>, refresh: bool) -> String {
-    let providers = state.session_providers(current_model(host).map(|m| m.provider).as_deref());
-    let mut lines = crate::menu::policy::accounts_report(state);
+    let current = current_model(host);
+    let providers = state.session_providers(current.as_ref().map(|m| m.provider.as_str()));
     let tokens = HostTokens { host, state };
+    if refresh {
+        for provider in crate::access::providers(state) {
+            crate::access::refresh(state, &tokens, &provider, true).await;
+        }
+    }
+    let mut lines = crate::menu::policy::accounts_report(state, current.as_ref());
     for provider in &providers {
         let snapshot = if refresh {
             let options = GetOptions {
@@ -144,9 +157,17 @@ pub async fn router(state: Arc<State>, args: String, ctx: CommandCtx) -> Result<
     }
 }
 
+/// `/router reset`: clears confirmed blocks and the models that failed on an account.
+pub fn reset_blocks(state: &State) -> &'static str {
+    state.router.tracker().clear();
+    state.models.clear_denied();
+    "subscription-router: cleared confirmed blocks and failed account models"
+}
+
 async fn router_action(state: &Arc<State>, host: &Host, action: &str) -> Result<()> {
     let state = state.clone();
     match action {
+        "" if host.has_ui() => crate::menu::open(host, &state).await,
         "" | "status" => {
             host.notify_info(status_report(host, &state, false).await)
                 .await
@@ -155,12 +176,9 @@ async fn router_action(state: &Arc<State>, host: &Host, action: &str) -> Result<
             host.notify_info(status_report(host, &state, true).await)
                 .await
         }
-        "reset" => {
-            state.router.tracker().clear();
-            host.notify_info("subscription-router: cleared confirmed blocks")
-                .await
-        }
+        "reset" => host.notify_info(reset_blocks(&state)).await,
         "manage" | "menu" => crate::menu::open(host, &state).await,
+        "indicator" => crate::menu::indicator::menu(host, &state).await,
         "accounts" => crate::menu::accounts::list(host, &state).await,
         "add" => crate::menu::accounts::add(host, &state).await,
         "profiles" => crate::menu::profiles::list(host, &state).await,

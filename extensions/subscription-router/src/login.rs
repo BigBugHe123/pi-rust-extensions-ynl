@@ -141,6 +141,7 @@ pub async fn login(
         .await
         .map_err(|e| e.to_string())?;
     state.usage().forget(&account.provider);
+    state.models.forget(&account.provider);
     Ok(Some(account))
 }
 
@@ -172,6 +173,7 @@ async fn own_login(
         .await
         .map_err(|e| e.to_string())?;
     state.usage().forget(&account.provider);
+    state.models.forget(&account.provider);
     providers::register(host, state, &account)
         .await
         .map_err(|e| e.to_string())?;

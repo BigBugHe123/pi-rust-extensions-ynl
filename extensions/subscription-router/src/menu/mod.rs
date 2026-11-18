@@ -1,6 +1,7 @@
-//! The `/router manage` menu.
+//! The `/router` menu.
 
 pub mod accounts;
+pub mod indicator;
 pub mod policy;
 pub mod profiles;
 
@@ -8,19 +9,20 @@ use std::sync::Arc;
 
 use pi_ext_sdk::prelude::*;
 
-use crate::commands::{status_report, switch_slot};
+use crate::commands::{reset_blocks, status_report, switch_slot};
 use crate::state::State;
 
-const ITEMS: [&str; 9] = [
+const ITEMS: [&str; 10] = [
     "Status",
     "Refresh usage",
     "Reset confirmed blocks",
     "Accounts",
     "Add account",
-    "Switch slot",
+    "Switch account",
     "Profiles",
     "Account policy",
     "Usage resets",
+    "Indicator",
 ];
 
 /// Index of `choice` in `options`; `None` when the dialog was dismissed.
@@ -42,17 +44,14 @@ pub async fn open(host: &Host, state: &Arc<State>) -> Result<()> {
                 host.notify_info(status_report(host, state, true).await)
                     .await?
             }
-            Some(2) => {
-                state.router.tracker().clear();
-                host.notify_info("subscription-router: cleared confirmed blocks")
-                    .await?;
-            }
+            Some(2) => host.notify_info(reset_blocks(state)).await?,
             Some(3) => accounts::list(host, state).await?,
             Some(4) => accounts::add(host, state).await?,
             Some(5) => switch_slot(host, state, None).await?,
             Some(6) => profiles::list(host, state).await?,
             Some(7) => policy::policy(host, state, "").await?,
-            Some(_) => policy::resets(host, state, "").await?,
+            Some(8) => policy::resets(host, state, "").await?,
+            Some(_) => indicator::menu(host, state).await?,
         }
     }
 }

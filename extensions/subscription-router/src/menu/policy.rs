@@ -14,7 +14,7 @@ use crate::fsutil::{duration, now_ms};
 use crate::menu::profiles::persist;
 use crate::pick::{account_ids, account_name, enabled};
 use crate::slots::{SlotInfo, status_text};
-use crate::state::{State, lock};
+use crate::state::{State, current_model, lock};
 
 const STRATEGY_HELP: [(AccountStrategy, &str); 4] = [
     (
@@ -75,14 +75,26 @@ async fn pick_family(host: &Host, title: &str) -> Result<Option<Family>> {
     )
 }
 
-fn account_line(state: &State, family: Family, slot: u32) -> String {
+/// The id of the current model when it is a model of `family`.
+fn current_id(host: &Host, family: Family) -> Option<String> {
+    current_model(host)
+        .filter(|m| parse_provider(&m.provider).is_some_and(|(f, _)| f == family))
+        .map(|m| m.id)
+}
+
+/// One account with its quota; `model` marks an account that cannot use it.
+fn account_line(state: &State, family: Family, slot: u32, model: Option<&str>) -> String {
+    let now = now_ms();
+    let provider = family.provider(slot);
     let info = SlotInfo {
         family,
         slot,
-        snapshot: state.usage().peek(&family.provider(slot)),
+        snapshot: state.usage().peek(&provider),
     };
     let login = if slot == 1 { " (pi login)" } else { "" };
-    format!("{}{login}", status_text(&info, now_ms()))
+    let lacks = model.filter(|id| state.models.lacks(&provider, id, now));
+    let lacks = lacks.map_or(String::new(), |id| format!(" · cannot use {id}"));
+    format!("{}{login}{lacks}", status_text(&info, now))
 }
 
 /// `/router use [claude|codex] [<n>|auto]`: pins an account for this session, or clears the pin.
@@ -102,6 +114,7 @@ pub async fn use_account(host: &Host, state: &Arc<State>, args: &str) -> Result<
     };
     let ids = account_ids(state, family);
     let policy = state.config().policy(family);
+    let model = current_id(host, family);
     let choice = match words.next() {
         Some("auto") => Some(None),
         Some(word) => match word.parse::<u32>().ok().filter(|n| ids.contains(n)) {
@@ -113,7 +126,10 @@ pub async fn use_account(host: &Host, state: &Arc<State>, args: &str) -> Result<
         },
         None => {
             let mut options = vec![format!("Automatic ({})", policy.strategy.as_str())];
-            options.extend(ids.iter().map(|slot| account_line(state, family, *slot)));
+            options.extend(
+                ids.iter()
+                    .map(|slot| account_line(state, family, *slot, model.as_deref())),
+            );
             let title = format!("{} account for this session", family.label());
             match index_of(&options, host.select(&title, &options).await?) {
                 None => None,
@@ -320,9 +336,10 @@ pub async fn policy(host: &Host, state: &Arc<State>, args: &str) -> Result<()> {
 
 async fn choose_account(host: &Host, state: &State, family: Family) -> Result<Option<u32>> {
     let ids = account_ids(state, family);
+    let model = current_id(host, family);
     let options: Vec<String> = ids
         .iter()
-        .map(|slot| account_line(state, family, *slot))
+        .map(|slot| account_line(state, family, *slot, model.as_deref()))
         .collect();
     Ok(index_of(&options, host.select("Account", &options).await?).map(|i| ids[i]))
 }
@@ -432,8 +449,9 @@ pub async fn resets(host: &Host, state: &Arc<State>, args: &str) -> Result<()> {
     host.notify_info(lines.join("\n")).await
 }
 
-/// One line per provider for `/router status`: the policy and the account each uses now.
-pub fn accounts_report(state: &State) -> Vec<String> {
+/// One line per provider for `/router status`: the policy and the account each uses now. The
+/// accounts that cannot use `current` say so.
+pub fn accounts_report(state: &State, current: Option<&ModelRef>) -> Vec<String> {
     if !enabled(state) {
         return Vec::new();
     }
@@ -445,6 +463,9 @@ pub fn accounts_report(state: &State) -> Vec<String> {
             continue;
         }
         let policy = state.config().policy(family);
+        let model = current
+            .filter(|m| parse_provider(&m.provider).is_some_and(|(f, _)| f == family))
+            .map(|m| m.id.as_str());
         let picks = lock(&state.picks);
         let current = picks.current.get(&family).copied().unwrap_or(1);
         let pinned = picks.pinned.get(&family).copied();
@@ -466,7 +487,8 @@ pub fn accounts_report(state: &State) -> Vec<String> {
             let note = full.map_or(String::new(), |u| {
                 format!(" · full for {}", duration(u - now))
             });
-            lines.push(format!("  {}{note}", account_line(state, family, slot)));
+            let line = account_line(state, family, slot, model);
+            lines.push(format!("  {line}{note}"));
         }
     }
     if let Some(model) = current_fallback(state) {

@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use pi_ext_sdk::Host;
 use serde_json::{Value, json};
 
+use crate::access::ModelAccess;
 use crate::accounts::AccountStore;
 use crate::config::{self, Config, ModelRef, ROUTER_PROVIDER};
 use crate::failover::Failover;
@@ -43,6 +44,8 @@ pub struct State {
     /// pi has `before_provider_auth`: accounts are logins of one provider, not providers.
     pub accounts_mode: AtomicBool,
     pub picks: Mutex<crate::pick::Picks>,
+    /// The models each account can use.
+    pub models: ModelAccess,
 }
 
 impl State {
@@ -71,6 +74,7 @@ impl State {
             recovered: Mutex::new(HashSet::new()),
             accounts_mode: AtomicBool::new(false),
             picks: Mutex::new(crate::pick::Picks::default()),
+            models: ModelAccess::load(data.join("account-models.json")),
         }
     }
 
@@ -214,13 +218,16 @@ impl HostEnv {
 }
 
 /// Whether a router chain model can run. With accounts, `anthropic-2/x` is model `anthropic/x`
-/// on account 2: the base model and a stored account.
+/// on account 2: the base model and a stored account that has the model.
 async fn chain_model_available(host: &Host, state: &State, model: &ModelRef) -> bool {
     let account = parse_provider(&model.provider).filter(|(_, slot)| *slot > 1);
     match account {
         Some((family, slot)) if state.accounts_mode.load(Ordering::Relaxed) => {
             let base = ModelRef::new(family.base(), &model.id);
             crate::pick::account_ids(state, family).contains(&slot)
+                && !state
+                    .models
+                    .lacks(&model.provider, &model.id, crate::fsutil::now_ms())
                 && model_available(host, &base).await
         }
         _ => model_available(host, model).await,
@@ -276,25 +283,28 @@ impl RouteEnv for HostEnv {
     }
 }
 
-/// Warms cold caches in the background; the hot path never waits for it.
+/// Warms cold usage caches and due model lists in the background; the hot path never waits.
 pub fn warm(host: &Host, state: &Arc<State>, providers: Vec<String>) {
     let (host, state) = (host.clone(), state.clone());
     tokio::spawn(async move {
+        let tokens = HostTokens {
+            host: &host,
+            state: &state,
+        };
         for provider in providers {
             let fresh = state
                 .usage()
                 .peek(&provider)
                 .is_some_and(|s| s.status == crate::usage::Status::Available);
             if !fresh {
-                let tokens = HostTokens {
-                    host: &host,
-                    state: &state,
-                };
                 state
                     .usage()
                     .get(&provider, &tokens, GetOptions::default())
                     .await;
             }
+        }
+        for provider in crate::access::providers(&state) {
+            crate::access::refresh(&state, &tokens, &provider, false).await;
         }
     });
 }

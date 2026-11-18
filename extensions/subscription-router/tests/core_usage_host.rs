@@ -35,7 +35,8 @@ fn agent_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
-/// `/router refresh` on a host: `usage` answers `usage.get` per provider.
+/// `/router refresh` on a host: `usage` answers `usage.get` per provider. Returns the requests
+/// and the usage endpoint reads; the model list reads of the refresh are left out.
 async fn refresh(
     name: &str,
     usage: impl Fn(&str) -> Value,
@@ -70,7 +71,11 @@ async fn refresh(
         })
         .await;
     host.finish().await.unwrap();
-    (seen, mock.requests())
+    let usage_reads = mock.requests().into_iter();
+    (
+        seen,
+        usage_reads.filter(|r| r.path.ends_with("/usage")).collect(),
+    )
 }
 
 #[tokio::test]
@@ -92,15 +97,6 @@ async fn a_host_with_slot_usage_serves_pi_slots_and_legacy_tokens_stay_here() {
     assert!(
         !asked.iter().any(|p| p["provider"] == "anthropic-3"),
         "a legacy slot went to pi: {asked:?}"
-    );
-    let auths: Vec<&Value> = seen
-        .iter()
-        .filter(|(m, _)| m == "auth.getProviderAuth")
-        .map(|(_, p)| p)
-        .collect();
-    assert!(
-        auths.iter().all(|p| p["provider"] != "anthropic-2"),
-        "{auths:?}"
     );
     let legacy: Vec<&str> = requests
         .iter()

@@ -203,12 +203,89 @@ impl AccountPolicy {
     }
 }
 
+/// The percent the footer indicator shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IndicatorPercent {
+    #[default]
+    Left,
+    Used,
+}
+
+impl IndicatorPercent {
+    pub const ALL: [IndicatorPercent; 2] = [Self::Left, Self::Used];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Used => "used",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.as_str() == text)
+    }
+}
+
+/// The usage window of the footer indicator.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IndicatorWindow {
+    /// The weekly percent and the reset of the fuller window.
+    #[default]
+    Auto,
+    FiveHour,
+    Week,
+}
+
+impl IndicatorWindow {
+    pub const ALL: [IndicatorWindow; 3] = [Self::Auto, Self::FiveHour, Self::Week];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::FiveHour => "5h",
+            Self::Week => "7d",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|w| w.as_str() == text)
+    }
+}
+
+/// The `subscription-router` footer status (`indicator`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Indicator {
+    pub show: bool,
+    pub percent: IndicatorPercent,
+    pub window: IndicatorWindow,
+    /// The countdown to the reset of the shown window.
+    pub reset: bool,
+    /// Every account of the provider after the one in use (`accounts: "all"`).
+    pub all_accounts: bool,
+    /// The account policy, or `pinned`, after the account in use.
+    pub strategy: bool,
+}
+
+impl Default for Indicator {
+    fn default() -> Self {
+        Self {
+            show: true,
+            percent: IndicatorPercent::default(),
+            window: IndicatorWindow::default(),
+            reset: true,
+            all_accounts: false,
+            strategy: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub profiles: Vec<Profile>,
     pub auto_switch_on_429: bool,
     /// Account policies by subscription provider; a missing one is the default.
     pub accounts: BTreeMap<&'static str, AccountPolicy>,
+    pub indicator: Indicator,
 }
 
 impl Default for Config {
@@ -217,6 +294,7 @@ impl Default for Config {
             profiles: Vec::new(),
             auto_switch_on_429: true,
             accounts: BTreeMap::new(),
+            indicator: Indicator::default(),
         }
     }
 }
@@ -367,7 +445,12 @@ pub fn parse_config(raw: &Value) -> Result<Config, String> {
         Some(_) => return Err("autoSwitchOn429: expected a boolean".into()),
     };
     let profiles = match root.get("profiles") {
-        None if root.contains_key("autoSwitchOn429") || root.contains_key("accounts") => Vec::new(),
+        None if ["autoSwitchOn429", "accounts", "indicator"]
+            .iter()
+            .any(|key| root.contains_key(*key)) =>
+        {
+            Vec::new()
+        }
         Some(Value::Object(profiles)) => profiles
             .iter()
             .map(|(id, value)| parse_profile(id, value))
@@ -382,11 +465,47 @@ pub fn parse_config(raw: &Value) -> Result<Config, String> {
             .collect::<Result<_, _>>()?,
         Some(_) => return Err("accounts: expected an object of provider -> policy".into()),
     };
+    let indicator = match root.get("indicator") {
+        None => Indicator::default(),
+        Some(value) => parse_indicator(value)?,
+    };
     Ok(Config {
         profiles,
         auto_switch_on_429,
         accounts,
+        indicator,
     })
+}
+
+fn parse_indicator(value: &Value) -> Result<Indicator, String> {
+    let raw = object(value, "indicator")?;
+    let mut indicator = Indicator::default();
+    let flag = |key: &str, default: bool| match raw.get(key) {
+        None => Ok(default),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(format!("indicator.{key}: expected a boolean")),
+    };
+    indicator.show = flag("show", indicator.show)?;
+    indicator.reset = flag("reset", indicator.reset)?;
+    indicator.strategy = flag("strategy", indicator.strategy)?;
+    if let Some(value) = raw.get("percent") {
+        indicator.percent = value
+            .as_str()
+            .and_then(IndicatorPercent::parse)
+            .ok_or("indicator.percent: expected left or used")?;
+    }
+    if let Some(value) = raw.get("window") {
+        indicator.window = value
+            .as_str()
+            .and_then(IndicatorWindow::parse)
+            .ok_or("indicator.window: expected auto, 5h, or 7d")?;
+    }
+    indicator.all_accounts = match raw.get("accounts").map(Value::as_str) {
+        None | Some(Some("current")) => false,
+        Some(Some("all")) => true,
+        Some(_) => return Err("indicator.accounts: expected current or all".into()),
+    };
+    Ok(indicator)
 }
 
 fn parse_policy(provider: &str, value: &Value) -> Result<(&'static str, AccountPolicy), String> {
@@ -453,4 +572,6 @@ fn parse_policy(provider: &str, value: &Value) -> Result<(&'static str, AccountP
 
 mod file;
 
-pub use file::{config_json, config_path, entry_json, load, policy_json, profile_json, save};
+pub use file::{
+    config_json, config_path, entry_json, indicator_json, load, policy_json, profile_json, save,
+};

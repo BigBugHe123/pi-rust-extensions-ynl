@@ -6,7 +6,7 @@ mod parse;
 mod service;
 
 pub use core::{CoreRead, from_older_host};
-pub use fetch::retry_after_ms;
+pub use fetch::{ANTHROPIC_USER_AGENT, retry_after_ms};
 pub use parse::{codex_account_id, parse_anthropic, parse_codex};
 pub use service::{BoxFuture, GetOptions, Tokens, Urls, UsageService};
 

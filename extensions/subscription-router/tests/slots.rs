@@ -4,7 +4,9 @@ use std::collections::HashSet;
 
 use common::now_ms;
 use pi_ext_subscription_router::config::ModelRef;
-use pi_ext_subscription_router::failover::{exhausted_message, failed_slot, retry_message};
+use pi_ext_subscription_router::failover::{
+    Failure, exhausted_message, failed_slot, retry_message,
+};
 use pi_ext_subscription_router::family::Family;
 use pi_ext_subscription_router::providers::provider_config;
 use pi_ext_subscription_router::slots::{
@@ -117,14 +119,19 @@ fn detects_429_on_the_current_slot() {
     let current = ModelRef::new("openai-codex-2", "gpt-5.5");
     assert_eq!(
         failed_slot(&message, Some(&current), Some(429)),
-        Some((Family::Codex, 2, "gpt-5.5".into()))
+        Some((Family::Codex, 2, "gpt-5.5".into(), Failure::RateLimited))
     );
     assert_eq!(failed_slot(&message, Some(&current), None), None);
     let with_code = json!({ "role": "assistant", "stopReason": "error", "provider": "anthropic", "model": "c", "errorMessage": "429 rate_limit_error" });
     let current_anthropic = ModelRef::new("anthropic", "c");
     assert_eq!(
         failed_slot(&with_code, Some(&current_anthropic), None),
-        Some((Family::Anthropic, 1, "c".into()))
+        Some((Family::Anthropic, 1, "c".into(), Failure::RateLimited))
+    );
+    let missing = json!({ "role": "assistant", "stopReason": "error", "provider": "anthropic", "model": "c", "errorMessage": "Provider HTTP 404: model: c" });
+    assert_eq!(
+        failed_slot(&missing, Some(&current_anthropic), None),
+        Some((Family::Anthropic, 1, "c".into(), Failure::MissingModel))
     );
     let other = ModelRef::new("router", "main");
     assert_eq!(failed_slot(&message, Some(&other), Some(429)), None);
