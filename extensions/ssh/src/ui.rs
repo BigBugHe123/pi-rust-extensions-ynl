@@ -27,6 +27,14 @@ pub async fn set_remote(state: &State, host: &Host, name: Option<String>) -> Res
 
 async fn connection(state: &State, ctx: &CommandCtx, name: &str, action: &str) -> Result<()> {
     let host = ctx.host();
+    #[cfg(windows)]
+    if action == "disconnect" {
+        return host
+            .notify_info(format!(
+                "SSH disconnect: {name} (Windows OpenSSH does not keep a shared ControlMaster connection)"
+            ))
+            .await;
+    }
     let config = config::load(host, &state.warned).await?;
     let profile = config
         .profiles
@@ -54,7 +62,14 @@ async fn connection(state: &State, ctx: &CommandCtx, name: &str, action: &str) -
             output.stderr
         )));
     }
-    host.notify_info(format!("SSH {action}: {name}")).await
+    let message = if cfg!(windows) && action == "connect" {
+        format!(
+            "SSH connection tested: {name} (Windows OpenSSH opens a separate connection for each command)"
+        )
+    } else {
+        format!("SSH {action}: {name}")
+    };
+    host.notify_info(message).await
 }
 
 async fn scope(host: &Host) -> Result<Option<std::path::PathBuf>> {
