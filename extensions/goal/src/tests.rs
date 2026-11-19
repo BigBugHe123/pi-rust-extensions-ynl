@@ -8,6 +8,7 @@ use crate::scheduler::{Decision, MAX_IDLE_RUNS, decide};
 use crate::state::{Goal, GoalStatus, TaskStatus};
 use crate::tasks::{FlatTask, apply_progress, merge_tasks, normalize_task_progress};
 use crate::update::{UpdatePlan, plan_update_goal};
+use crate::view::details;
 
 pub fn temp_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("pi-goal-test-{name}-{}", crate::state::new_id()));
@@ -145,6 +146,33 @@ fn progress_is_atomic_and_gates_parents() {
     assert_eq!(goal.counts().complete, 2);
     goal.block_completion = true;
     assert_eq!(goal.gating_pending().len(), 1);
+}
+
+#[test]
+fn details_carry_the_pi_goal_x_task_tree() {
+    assert_eq!(details(None), json!({ "version": 3, "goal": null }));
+    let goal = Goal::new("Ship it", false, None);
+    assert_eq!(details(Some(&goal)), json!({ "version": 3, "goal": {} }));
+    let mut goal = goal_with_tasks();
+    let start = json!({ "updates": [{ "task_id": "b", "status": "start" }, { "task_id": "a1", "status": "start" }] });
+    apply_progress(&mut goal, &normalize_task_progress(&start).unwrap()).unwrap();
+    let task = |id: &str, status: &str| json!({ "id": id, "title": format!("Task {id}"), "status": status });
+    let tree = |a: &str, a1: &str| {
+        let mut parent = task("a", a);
+        parent["subtasks"] = json!([task("a1", a1)]);
+        json!([parent, task("b", "pending")])
+    };
+    assert_eq!(
+        details(Some(&goal)),
+        json!({ "version": 3, "goal": { "currentTaskId": "a1", "taskList": { "tasks": tree("pending", "pending") } } })
+    );
+    let finish = json!({ "updates": [{ "task_id": "a1", "status": "complete" }, { "task_id": "a", "status": "skipped", "reason": "covered by a1" }] });
+    apply_progress(&mut goal, &normalize_task_progress(&finish).unwrap()).unwrap();
+    assert_eq!(goal.current_task_id, None);
+    assert_eq!(
+        details(Some(&goal)),
+        json!({ "version": 3, "goal": { "currentTaskId": "b", "taskList": { "tasks": tree("skipped", "complete") } } })
+    );
 }
 
 #[test]

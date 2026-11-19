@@ -1,6 +1,6 @@
 # pi-ext-goal
 
-Created 2026-10-30. Last updated 2026-11-04.
+Created 2026-10-30. Last updated 2026-11-19.
 
 Persistent goals for pi. This is a Rust port of the `pi-goal-x` package (v0.34.1). It has guided drafting, a task tree, autonomous continuation turns, and a completion auditor. The tool names, the parameter names, and the command names are the same as upstream, so prompts written for pi-goal-x keep working. Run it as `pi-rust-ext goal`.
 
@@ -18,6 +18,8 @@ Tool descriptions and schemas use compact guidance. The `goal` section carries l
 | `goal_question` | `question`, `options?`, `recommended?`, `allow_custom?` | Only during a draft. Shows a select dialog with an "Other" choice. |
 | `goal_questionnaire` | `questions[]` (`id`, `question`, `context?`, `options`, `recommended?`, `allow_custom?`) | Only during a draft. Asks the questions in sequence. |
 | `propose_goal_draft` | `objective`, `token_budget?` (`null` removes it), `auto_continue?`, `sisyphus?`, `tasks?`, `block_completion?` | Only during a draft. Opens a scrollable panel: Enter confirms, `c` or Esc continues the chat, and `x` cancels the draft. |
+
+Result details: each result of `create_goal`, `get_goal`, `update_goal`, `set_goal_tasks`, and `update_goal_task` has the pi-goal-x `details` `{ version: 3, goal }`, which Paseo reads to show the task list. `goal` is `null` without a focused goal. Else it has `currentTaskId` (the current task, else the first task in progress) and, when the goal has tasks, `taskList: { tasks }`. Each task is `{ id, title, status, subtasks? }`, nested by `parentId`, with `status` `pending` (also for a task in progress), `complete`, or `skipped`. `create_goal` also keeps `goalId`.
 
 Tool profile: on each `before_agent_start`, the extension puts the profile tools in the active tool list. The profile is the three core tools plus the two task tools (unless `disableTasks` is set), or the three drafting tools while a draft is open. The other active tools do not change. Without a UI, or in `rpc` mode, a proposal is confirmed automatically and a question gets its recommended option.
 
