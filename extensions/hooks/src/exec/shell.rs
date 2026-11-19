@@ -7,6 +7,9 @@
 //!
 //! The Windows lookup is a pure function of [`Lookup`], so it is tested on every platform.
 
+// Only the Windows build calls the resolver; the tests exercise it everywhere.
+#![cfg_attr(not(windows), allow(dead_code))]
+
 use base64::Engine as _;
 
 /// The interpreter a hook asks for.
