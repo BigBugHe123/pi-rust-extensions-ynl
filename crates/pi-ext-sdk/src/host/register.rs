@@ -95,18 +95,21 @@ impl Host {
         F: Fn(EventCtx) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<R>> + Send + 'static,
     {
-        let is_new = {
+        let (is_new, context_events) = {
             let mut registry = self.registry();
             let is_new = registry.event_handlers(event).is_empty();
             registry
                 .events
                 .push((event.to_owned(), handler::event(run)));
-            is_new
+            (is_new, registry.context_events_field())
         };
         if !is_new {
             return Ok(());
         }
-        let params = json!({ "events": [event] });
+        let mut params = json!({ "events": [event] });
+        if let Some(listed) = context_events {
+            params["contextEvents"] = listed;
+        }
         self.call("register.events", params).await.map(drop)
     }
 

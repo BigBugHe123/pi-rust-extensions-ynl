@@ -86,8 +86,8 @@ pub async fn route(state: Arc<State>, request: RouteRequest, host: Host) -> Resu
 }
 
 /// The trailing failed assistant message of the projected context and its entry id.
-pub fn trailing_error(event: &Value) -> Option<(String, Value)> {
-    let entries = event.pointer("/context/contextEntries")?.as_array()?;
+pub fn trailing_error(context: &Value) -> Option<(String, Value)> {
+    let entries = context.get("contextEntries")?.as_array()?;
     for entry in entries.iter().rev() {
         let Some(last) = entry
             .get("messages")
@@ -109,14 +109,19 @@ pub fn trailing_error(event: &Value) -> Option<(String, Value)> {
 
 /// `agent_before_settle`: a confirmed quota error of a chain model drops the failed message with
 /// a `context_edit` and continues; the continuation routes past the blocked model.
-pub async fn on_before_settle(host: Host, state: Arc<State>, event: Value) -> Result<EventReply> {
+pub async fn on_before_settle(ev: EventCtx, state: Arc<State>) -> Result<EventReply> {
+    let host = ev.host().clone();
     let Some(current) = current_model(&host).filter(|m| m.provider == ROUTER_PROVIDER) else {
         return Ok(EventReply::none());
     };
     let Some(profile) = state.config().profile(&current.id).cloned() else {
         return Ok(EventReply::none());
     };
-    let Some((entry_id, message)) = trailing_error(&event) else {
+    // Only now, since the context is as large as the session's model context.
+    let Some(context) = ev.context().await? else {
+        return Ok(EventReply::none());
+    };
+    let Some((entry_id, message)) = trailing_error(&context) else {
         return Ok(EventReply::none());
     };
     let field = |k: &str| {
@@ -151,7 +156,7 @@ pub async fn on_before_settle(host: Host, state: Arc<State>, event: Value) -> Re
                 entry.model.key()
             );
             host.notify_warning(notice).await.ok();
-            let mut entries = event
+            let mut entries = ev
                 .get("entries")
                 .and_then(Value::as_array)
                 .cloned()

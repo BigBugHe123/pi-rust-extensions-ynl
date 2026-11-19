@@ -80,7 +80,7 @@ All handlers are closures that return a future: `|args, ctx| async move { ... }`
 
 - All three: `host()`, `snapshot()` (the ctx snapshot: `cwd`, `has_ui`, `model`, `flags`, `session_id`, and more), `cancel_token()`, `is_cancelled()`, `cancelled().await`.
 - `ToolCtx`: `tool_call_id()`, `update(partial)` sends `tool.update`.
-- `EventCtx`: `name()`, `event()` (JSON), `event_as::<T>()`, `get(key)`. Typed views of common events are in `pi_ext_sdk::event_types`.
+- `EventCtx`: `name()`, `event()` (JSON), `event_as::<T>()`, `get(key)`, and `context().await` for `turn_end` and `agent_before_settle`: the preview of the whole model context, which pi sends only when asked (feature `contextEvents`; older hosts send it with the event). Typed views of common events are in `pi_ext_sdk::event_types`.
 
 ### Event replies
 

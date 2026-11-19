@@ -60,6 +60,10 @@ pub(crate) struct Registry {
     pub(crate) result_expander: Option<(Value, RenderFn<ToolResultRender>)>,
 }
 
+/// Events whose `context` previews the whole model context. The SDK lists none of them in
+/// `contextEvents`, so pi sends no `context` and [`crate::EventCtx::context`] asks for it.
+const BOUNDARY_EVENTS: [&str; 2] = ["turn_end", "agent_before_settle"];
+
 /// The entry of `key` in a `(key, value)` list; a later `put` replaces it.
 pub(crate) fn find<T: Clone>(list: &[(String, T)], key: &str) -> Option<T> {
     list.iter()
@@ -213,6 +217,19 @@ impl Registry {
         if let Some((settings, _)) = &self.result_expander {
             result.insert("toolResultExpander".into(), settings.clone());
         }
+        if let Some(listed) = self.context_events_field() {
+            result.insert("contextEvents".into(), listed);
+        }
         Value::Object(result)
+    }
+
+    /// `contextEvents: []` once the extension subscribes to a boundary event: older SDKs send no
+    /// list, and pi then sends `context` with every boundary event.
+    pub(crate) fn context_events_field(&self) -> Option<Value> {
+        let subscribed = self.event_names();
+        let boundary = BOUNDARY_EVENTS
+            .iter()
+            .any(|event| subscribed.iter().any(|name| name == event));
+        boundary.then(|| json!([]))
     }
 }
