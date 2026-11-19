@@ -1,7 +1,12 @@
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
 use pi_ext_sdk::prelude::*;
 
-use crate::test_host::Host;
-use crate::tests::Temp;
+use crate::task::{self, Status};
+use crate::test_host::{Answer, Host};
+use crate::tests::{Temp, sample};
 
 fn task_id(text: &str) -> String {
     let start = text.find('(').unwrap() + 1;
@@ -142,14 +147,30 @@ async fn tools_notify_and_shutdown_over_protocol() {
         .tool(11, &ctx, "bg_status", json!({"taskId":survivor}))
         .await;
     assert!(status.contains("[running]"), "{status}");
+    // In RPC mode a session with a file is resumed later, so its tasks outlive pi.
+    let file = temp.0.join("sess-1.jsonl");
+    let rpc =
+        json!({"cwd":temp.0,"hasUI":false,"sessionId":"sess-1","sessionFile":file,"mode":"rpc"});
     host.call(
         12,
         "event",
-        json!({"name":"session_shutdown","event":{"reason":"quit"},"ctx":ctx}),
+        json!({"name":"session_shutdown","event":{"reason":"quit"},"ctx":rpc}),
     )
     .await;
     let status = host
         .tool(13, &ctx, "bg_status", json!({"taskId":survivor}))
+        .await;
+    assert!(status.contains("[running]"), "quit in rpc mode: {status}");
+    // A session without a file (`--no-session`) is never resumed.
+    let ephemeral = json!({"cwd":temp.0,"hasUI":false,"sessionId":"sess-1","mode":"rpc"});
+    host.call(
+        14,
+        "event",
+        json!({"name":"session_shutdown","event":{"reason":"quit"},"ctx":ephemeral}),
+    )
+    .await;
+    let status = host
+        .tool(15, &ctx, "bg_status", json!({"taskId":survivor}))
         .await;
     assert!(status.contains("[killed]"), "{status}");
     let notices = host
@@ -253,4 +274,120 @@ async fn bg_command_and_tasks_panel_over_protocol() {
                 .await;
         }
     }
+}
+
+fn read_json(path: &Path) -> Value {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or(Value::Null)
+}
+
+/// An idle pi that saves each message it takes into `entries`.
+fn saving_pi(entries: Arc<Mutex<Vec<Value>>>) -> Answer {
+    Box::new(move |method, params| match method {
+        "session.sendMessage" => {
+            let mut entries = entries.lock().unwrap();
+            let id = format!("e{}", entries.len());
+            entries.push(
+                json!({"type":"custom_message","customType":params["customType"],
+                "content":params["content"],"display":true,"details":params["details"],"id":id}),
+            );
+            Value::Null
+        }
+        "session.getEntries" => json!(*entries.lock().unwrap()),
+        "ctx.isIdle" => json!(true),
+        _ => json!({}),
+    })
+}
+
+async fn started(host: &mut Host, temp: &Temp, session: &str, mode: &str) -> Value {
+    let agent = temp.0.join("agent");
+    let init = json!({"protocolVersion":1,"cwd":temp.0,"agentDir":agent,"hasUI":false,"mode":mode});
+    host.call(0, "initialize", init).await;
+    let file = temp.0.join(format!("{session}.jsonl"));
+    let ctx = json!({"cwd":temp.0,"hasUI":false,"sessionId":session,"sessionFile":file});
+    let start = json!({"name":"session_start","event":{"reason":"startup"},"ctx":ctx});
+    host.call(1, "event", start).await;
+    ctx
+}
+
+#[tokio::test]
+async fn a_notification_counts_once_the_session_holds_it() {
+    let temp = Temp::new();
+    let mut host = Host::start();
+    let entries = Arc::new(Mutex::new(Vec::new()));
+    host.answer = saving_pi(entries.clone());
+    let ctx = started(&mut host, &temp, "s2", "rpc").await;
+    let run = json!({"name":"Echo","command":"echo hi","isAgent":false});
+    let id = task_id(&host.tool(2, &ctx, "bg_run", run).await);
+    let file = temp
+        .0
+        .join("agent/ext/background-tasks/sessions/s2")
+        .join(&id)
+        .join(task::TASK_FILE);
+    let sent = |_: &Host| read_json(&file)["noticeSentAt"].is_u64();
+    assert!(host.pump_until(Duration::from_secs(10), sent).await);
+    assert_eq!(
+        read_json(&file)["notified"],
+        false,
+        "sent, not yet confirmed"
+    );
+    let confirmed = |_: &Host| read_json(&file)["notified"] == true;
+    assert!(host.pump_until(Duration::from_secs(10), confirmed).await);
+    host.pump_until(Duration::from_secs(1), |_| false).await;
+    assert_eq!(host.count("session.sendMessage"), 1);
+    assert_eq!(host.count("session.getEntries"), 1);
+    assert_eq!(entries.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_notification_already_in_the_session_is_not_sent_again() {
+    let temp = Temp::new();
+    let sessions = temp.0.join("agent/ext/background-tasks/sessions/s3");
+    // The process that sent it ended before it saw the message in the session.
+    let mut done = sample("abcd0001", Status::Completed);
+    done.dir = sessions.join(&done.id);
+    done.notice_sent_at = Some(task::now_ms() - 1_000);
+    task::create_private_dir(&done.dir).unwrap();
+    done.save().unwrap();
+    let saved = json!({"type":"custom_message","customType":"background-task-notification",
+        "content":"<background-task-notification>","details":{"id":"abcd0001"},"id":"e0"});
+    let entries = Arc::new(Mutex::new(vec![saved]));
+    let mut host = Host::start();
+    host.answer = saving_pi(entries.clone());
+    started(&mut host, &temp, "s3", "rpc").await;
+    let file = done.dir.join(task::TASK_FILE);
+    let confirmed = |_: &Host| read_json(&file)["notified"] == true;
+    assert!(host.pump_until(Duration::from_secs(10), confirmed).await);
+    host.pump_until(Duration::from_secs(1), |_| false).await;
+    assert_eq!(host.count("session.sendMessage"), 0);
+    assert_eq!(entries.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn quit_keeps_survivors_when_initialize_says_rpc_mode() {
+    let temp = Temp::new();
+    let mut host = Host::start();
+    let ctx = started(&mut host, &temp, "s4", "rpc").await;
+    let keep = json!({"name":"Keep","command":"sleep 30","isAgent":false});
+    let keep = task_id(&host.tool(2, &ctx, "bg_run", keep).await);
+    let stop = json!({"name":"Stop","command":"sleep 30","isAgent":false,"surviveReload":false});
+    let stop = task_id(&host.tool(3, &ctx, "bg_run", stop).await);
+    let quit = json!({"name":"session_shutdown","event":{"reason":"quit"},"ctx":ctx});
+    host.call(4, "event", quit).await;
+    let status = host.tool(5, &ctx, "bg_status", json!({})).await;
+    assert!(
+        status.contains(&format!("{keep} Keep [running]")),
+        "{status}"
+    );
+    assert!(
+        status.contains(&format!("{stop} Stop [killed]")),
+        "{status}"
+    );
+    let killed = host.tool(6, &ctx, "bg_kill", json!({"taskId":keep})).await;
+    assert!(
+        killed.starts_with("Killed background task Keep"),
+        "{killed}"
+    );
 }

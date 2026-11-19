@@ -8,19 +8,32 @@ use tokio::process::Command;
 
 use crate::identity::{Owner, group_members, group_unchanged, owner};
 
-/// Starts `command` detached in its own process group, with stdout and stderr appended to
-/// `output`. The wrapper writes the exit code to `exit` so a later process can read it.
+/// Starts `command` in this process, in its own process group, with stdout and stderr appended
+/// to `output`. The wrapper writes the exit code to `exit` so a later process can read it. The
+/// wrapper is a child of this process, so a kill of pi's process tree reaches it; the launcher
+/// (`crate::launch`) avoids that.
 pub fn spawn(command: &str, cwd: &Path, output: &Path, exit: &Path) -> io::Result<u32> {
+    let child = Command::from(wrapper_command(command, cwd, output, exit)?).spawn()?;
+    child
+        .id()
+        .ok_or_else(|| io::Error::other("process exited before it had a pid"))
+}
+
+/// The wrapper shell of `command` in `cwd`: stdin from null, stdout and stderr appended to
+/// `output`, the exit code written to `exit`, and on Unix a process group of its own.
+pub fn wrapper_command(
+    command: &str,
+    cwd: &Path,
+    output: &Path,
+    exit: &Path,
+) -> io::Result<std::process::Command> {
     let log = private_append(output)?;
     let mut cmd = wrapper(command, exit);
     cmd.current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log));
-    let child = Command::from(cmd).spawn()?;
-    child
-        .id()
-        .ok_or_else(|| io::Error::other("process exited before it had a pid"))
+    Ok(cmd)
 }
 
 #[cfg(unix)]

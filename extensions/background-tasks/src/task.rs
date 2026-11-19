@@ -66,8 +66,13 @@ pub struct Task {
     pub status: Status,
     #[serde(default)]
     pub exit_code: Option<i32>,
+    /// No notification is owed: the session holds it, or the task was stopped or sends none.
     #[serde(default)]
     pub notified: bool,
+    /// When a process last sent the notification (ms since the epoch); recorded before the
+    /// send, so a later process checks the session before it sends again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice_sent_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
