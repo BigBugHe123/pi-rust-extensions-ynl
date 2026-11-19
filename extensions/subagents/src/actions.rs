@@ -80,13 +80,22 @@ pub async fn report_when_done(
         store::write_status(&async_dir, &collect(&app, &ids));
     }
     let _ = app.draw_widget(&host).await;
-    let runs = collect(&app, &ids);
-    let message = CustomMessage::new(NOTIFY_TYPE, notify_text(&runs))
-        .display(true)
-        .details(call_details(&runs, mode))
-        .deliver_as(DeliverAs::FollowUp)
-        .trigger_turn(true);
+    let message = notify_message(&collect(&app, &ids), mode);
     deliver_with_retry(&host, message, "subagents").await;
+}
+
+/// The `subagent-notify` message of the finished runs of one `async` call.
+pub fn notify_message(runs: &[Run], mode: &str) -> CustomMessage {
+    CustomMessage::new(NOTIFY_TYPE, notify_text(runs))
+        .display(true)
+        .details(call_details(runs, mode))
+        .deliver_as(DeliverAs::FollowUp)
+        .trigger_turn(true)
+}
+
+/// The `agent:wake` data that tells a sleeping agent that background results arrived.
+pub fn wake_data(source: &str) -> Value {
+    json!({ "source": source, "reason": "background results arrived" })
 }
 
 /// Sends `message`, retrying with backoff while pi does not accept it (for example during
@@ -96,8 +105,9 @@ pub async fn deliver_with_retry(host: &Host, message: CustomMessage, source: &st
     for attempt in 1..=DELIVERY_ATTEMPTS {
         match host.send_message(message.clone()).await {
             Ok(()) => {
-                let wake = json!({ "source": source, "reason": "background results arrived" });
-                let _ = host.emit(crate::messaging::WAKE_CHANNEL, wake).await;
+                let _ = host
+                    .emit(crate::messaging::WAKE_CHANNEL, wake_data(source))
+                    .await;
                 return;
             }
             Err(err) if attempt == DELIVERY_ATTEMPTS => {

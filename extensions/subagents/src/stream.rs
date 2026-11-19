@@ -1,10 +1,10 @@
 //! Folds the child's `--mode json` event stream into run progress.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
@@ -13,16 +13,16 @@ pub struct ToolCall {
     pub is_error: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Usage {
     pub input: u64,
     pub output: u64,
     pub cost: f64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Progress {
     pub turns: u32,
     pub tools: Vec<ToolCall>,
@@ -33,6 +33,8 @@ pub struct Progress {
     pub usage: Usage,
     pub model: Option<String>,
     pub settled: bool,
+    /// The `details` of the last successful child `todo` call.
+    pub todo: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -119,6 +121,7 @@ impl Progress {
         }
         let details = &event["result"]["details"];
         if event["toolName"] == "todo" && !is_error && details.is_object() {
+            self.todo = Some(details.clone());
             return Effect::Todo(details.clone());
         }
         Effect::Changed

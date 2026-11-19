@@ -87,18 +87,18 @@ pub async fn serve(app: App, host: Host) -> Result<()> {
 mod tests {
     use super::*;
     use crate::runs::Runs;
-    use pi_ext_sdk::CancellationToken;
 
     #[test]
     fn running_runs_show_and_finished_runs_leave() {
         let runs = Runs::default();
-        let first = runs.start(
+        let (first, second) = (runs.next_id(), runs.next_id());
+        runs.insert(Run::new(
+            &first,
             "reviewer",
             "Review the parser\nin detail",
             true,
-            CancellationToken::new(),
-        );
-        let second = runs.start("scout", "Find callers", false, CancellationToken::new());
+        ));
+        runs.insert(Run::new(&second, "scout", "Find callers", false));
         let text_of = || text(&runs.all());
         assert_eq!(
             text_of(),
