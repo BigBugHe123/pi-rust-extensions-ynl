@@ -2,6 +2,12 @@
 
 All notable changes to pi-rust-extensions are documented here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, breaking changes bump the minor version.
 
+## [0.5.20] - 2026-11-19
+
+### Fixed
+
+- **hooks:** run shell-form hooks with Git Bash on Windows ([0c5650d](https://github.com/yannelli/pi-rust-extensions/commit/0c5650dba98caec7771529f70ed37ab538264d2b))
+
 ## [0.5.19] - 2026-11-19
 
 ### Added
