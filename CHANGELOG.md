@@ -2,6 +2,14 @@
 
 All notable changes to pi-rust-extensions are documented here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, breaking changes bump the minor version.
 
+## [0.5.17] - 2026-11-19
+
+### Fixed
+
+- **goal:** add the pi-goal-x details to goal tool results ([8755593](https://github.com/yannelli/pi-rust-extensions/commit/87555934d653ad19494403b9b61e260065346524))
+- **todo:** report update as the details action of added actions ([b633bb7](https://github.com/yannelli/pi-rust-extensions/commit/b633bb7f7f41190ecbb45546755c4d9cf5029db3))
+- **subagents:** match the Paseo subagent contracts ([7e5d787](https://github.com/yannelli/pi-rust-extensions/commit/7e5d787acf25ee05ed85bf30a616b9ad70521ff8))
+
 ## [0.5.16] - 2026-11-18
 
 ### Added
