@@ -3,6 +3,7 @@ pub mod command;
 pub mod http;
 pub mod mcp;
 pub mod prompt;
+pub mod shell;
 
 use std::path::PathBuf;
 
@@ -13,6 +14,7 @@ use crate::model::HookDef;
 use crate::output::RawRun;
 use crate::paths::{env_file, project_root};
 use command::{CommandSpec, run_command};
+use shell::ShellKind;
 
 pub struct Context {
     pub host: Host,
@@ -51,11 +53,35 @@ pub async fn run(cx: &Context, def: &HookDef, input: String) -> RawRun {
                 cwd: cx.cwd.clone(),
                 env,
                 timeout,
-                login_shell: def.source.is_codex(),
+                shell: shell_kind(def),
+                shell_path: shell_path(cx).await,
             };
             run_command(spec).await
         }
     }
+}
+
+fn shell_kind(def: &HookDef) -> ShellKind {
+    if def.str_field("shell") == Some("powershell") {
+        ShellKind::PowerShell
+    } else if def.source.is_codex() {
+        ShellKind::Login
+    } else {
+        ShellKind::Posix
+    }
+}
+
+/// pi's `shellPath`, so hooks on Windows use the same bash as the bash tool.
+async fn shell_path(cx: &Context) -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    cx.host
+        .settings::<String>("shellPath")
+        .await
+        .ok()
+        .flatten()
+        .filter(|path| !path.trim().is_empty())
 }
 
 const PLACEHOLDERS: &[&str] = &[
