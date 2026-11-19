@@ -169,6 +169,68 @@ async fn panel_keys_add_and_complete_a_todo() {
     host.finish().await;
 }
 
+/// Paseo's rpiv-todo adapter accepts only the six rpiv-todo actions in `details.action`.
+#[tokio::test]
+async fn added_actions_report_update_and_keep_their_action_in_params() {
+    let agent = pi_ext_e2e::TempDir::new().unwrap();
+    let mut host = started(&agent).await;
+    let calls = [
+        (
+            json!({ "action": "create", "tasks": [{ "subject": "A" }, { "subject": "B" }] }),
+            "create",
+        ),
+        (
+            json!({ "action": "move", "id": 2, "position": 1 }),
+            "update",
+        ),
+        (json!({ "action": "add_phase", "title": "Build" }), "update"),
+        (
+            json!({ "action": "update_phase", "phase": 1, "status": "in_progress" }),
+            "update",
+        ),
+        (
+            json!({ "action": "set_goal", "phase": 1, "goal": "ship" }),
+            "update",
+        ),
+        (json!({ "action": "delete_phase", "phase": 1 }), "update"),
+        (
+            json!({ "action": "update", "id": 1, "status": "in_progress" }),
+            "update",
+        ),
+        (json!({ "action": "list" }), "list"),
+    ];
+    let mut results = Vec::new();
+    for (id, (params, reported)) in (2..).zip(calls) {
+        let call = json!({ "toolCallId": format!("c{id}"), "name": "todo", "ctx": ctx(), "params": params });
+        host.request(id, "tool.execute", call).await;
+        let result = host.response(id).await["result"].clone();
+        assert_eq!(result["details"]["action"], reported, "{result}");
+        assert_eq!(result["details"]["params"], params, "{result}");
+        results.push(result);
+    }
+    assert_eq!(
+        results[1]["details"],
+        json!({ "action": "update", "params": { "action": "move", "id": 2, "position": 1 },
+            "tasks": [{ "id": 2, "subject": "B", "status": "pending" }, { "id": 1, "subject": "A", "status": "pending" }],
+            "nextId": 3 })
+    );
+    let entries = host.seen_method("session.appendEntry");
+    let phase_entry = &entries[entries.len() - 2]["data"];
+    assert_eq!(phase_entry["action"], "update");
+    assert_eq!(phase_entry["params"]["action"], "delete_phase");
+    let listed = "[pending] #2 B\n[in_progress] #1 A";
+    assert_eq!(results.last().unwrap()["content"][0]["text"], listed);
+    let replay =
+        json!({ "name": "session_start", "event": { "type": "session_start" }, "ctx": ctx() });
+    host.request(20, "event", replay).await;
+    host.response(20).await;
+    let call = json!({ "toolCallId": "c21", "name": "todo", "ctx": ctx(), "params": { "action": "list" } });
+    host.request(21, "tool.execute", call).await;
+    let replayed = host.response(21).await["result"]["content"][0]["text"].clone();
+    assert_eq!(replayed, listed);
+    host.finish().await;
+}
+
 #[tokio::test]
 async fn child_scope_tags_details_and_draws_no_widget() {
     let mut host = TestHost::start(pi_ext_todo::extension(

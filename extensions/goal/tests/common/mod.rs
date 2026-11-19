@@ -177,11 +177,16 @@ impl Host {
         self.request("event", params).await
     }
 
-    /// Runs a tool and returns `(text, isError)`.
-    pub async fn tool(&mut self, name: &str, params: Value) -> (String, bool) {
+    /// Runs a tool and returns its result.
+    pub async fn tool_result(&mut self, name: &str, params: Value) -> Value {
         let call = json!({ "toolCallId": format!("call-{name}-{}", self.next_id),
             "name": name, "params": params, "ctx": self.ctx });
-        let result = self.request("tool.execute", call).await;
+        self.request("tool.execute", call).await
+    }
+
+    /// Runs a tool and returns `(text, isError)`.
+    pub async fn tool(&mut self, name: &str, params: Value) -> (String, bool) {
+        let result = self.tool_result(name, params).await;
         let text = result["content"]
             .as_array()
             .map(|blocks| {

@@ -1,6 +1,6 @@
 # pi-ext-subagents
 
-Created 2026-10-30. Last updated 2026-11-04.
+Created 2026-10-30. Last updated 2026-11-19.
 
 Runs tasks in child pi processes. Three built-in agents: `explore` (read-only search), `build` (full tools), and `advisor` (read-only review with a recommendation). You can change them and add your own. Run it with `pi-rust-ext subagents`. Simplified from `pi-subagents`.
 
@@ -8,7 +8,7 @@ Runs tasks in child pi processes. Three built-in agents: `explore` (read-only se
 
 | Param | Use |
 | --- | --- |
-| `action` | `run` (default), `list` (agents), `status` (all runs, or one run by `id`), `stop` (`id`) |
+| `action` | `list` (agents), `status` (all runs, or one run by `id`), `stop` (`id`). Omit it to run `task` or `tasks`. |
 | `agent` | Agent name. Default `explore`. |
 | `task` | The full task. The child does not see the parent conversation. |
 | `tasks` | `[{ agent?, task, model?, thinking?, cwd? }]`: tasks that run in parallel (`maxParallel` at a time). |
@@ -22,8 +22,9 @@ Foreground runs send `tool.update` with each child tool call and the tail of the
 - `results`: one row `{ index, agent, exitCode?, success, sessionFile }` per finished run. `success` is `true` for a completed run only. `exitCode` is absent when the child did not exit by itself.
 - `runs`: `[{ id, agent, task, status, background, model, turns, tools, usage, output, exitCode, durationMs, sessionFile }]`.
 - An `async` call returns `results: []`, `asyncId` (the first run id), and `asyncDir` (the first run's directory).
+- A foreground `tasks` call also returns `status: "batch"` and `children: [{ id, name, agent, task, status, sessionFile }]` (one per run, `name` is the agent name) when every run wrote its session file. An `async` call never returns them.
 
-These are the fields of the `pi-subagents` result, so Paseo links each `subagent` call with `agent` and `task` to its child and shows the child session. An abort of the tool call kills the child's process group. On shutdown the extension cancels all runs and waits up to 1.4 seconds, so the group gets SIGKILL 1 second after SIGTERM.
+These are the fields of the `pi-subagents` result, so Paseo links each `subagent` call with `agent` and `task` and no `action` to its child and shows the child session. `status` and `children` are the batch fields of the `edxeth/pi-subagents` result, so Paseo also shows each child of a foreground `tasks` call. Paseo reads the arguments as the model sent them, so the schema does not list `action: "run"`. A call with `action: "run"` still runs: the extension removes the action in `prepareArguments`, before pi validates the call. An abort of the tool call kills the child's process group. On shutdown the extension cancels all runs and waits up to 1.4 seconds, so the group gets SIGKILL 1 second after SIGTERM.
 
 ## Child process
 

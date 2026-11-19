@@ -9,7 +9,9 @@ use pi_ext_sdk::prelude::*;
 use serde::Deserialize;
 use tokio::sync::{Notify, Semaphore};
 
-use crate::actions::{call_details, collect, list_agents, report_when_done, status, stop};
+use crate::actions::{
+    add_batch_fields, call_details, collect, list_agents, report_when_done, status, stop,
+};
 use crate::agent::AgentDef;
 use crate::app::App;
 use crate::command::{Inherit, Overrides, pi_binary};
@@ -64,7 +66,7 @@ constraints. `tasks` run in parallel; `async: true` runs in the background and t
     .parameters(json!({
         "type": "object",
         "properties": {
-            "action": { "type": "string", "enum": ["run", "list", "status", "stop"] },
+            "action": { "type": "string", "enum": ["list", "status", "stop"], "description": "Omit to run `task` or `tasks`" },
             "agent": { "type": "string", "description": "Default explore" },
             "task": { "type": "string" },
             "tasks": { "type": "array", "items": task },
@@ -86,9 +88,20 @@ pub async fn execute(app: App, params: Params, ctx: ToolCtx) -> Result<ToolResul
         "stop" => Ok(stop(&app, params.id.as_deref())),
         "run" => run(app, params, ctx).await,
         other => Ok(ToolResult::error(format!(
-            "Unknown action \"{other}\". Use run, list, status, or stop."
+            "Unknown action \"{other}\". Use list, status, or stop, or omit action to run."
         ))),
     }
+}
+
+/// Drops `action: "run"` before pi validates the call, because the schema does not list it:
+/// Paseo shows a run only when the call has no `action`. Older prompts still send it.
+pub fn prepare(mut args: Value) -> Value {
+    if args["action"] == "run"
+        && let Some(object) = args.as_object_mut()
+    {
+        object.remove("action");
+    }
+    args
 }
 
 /// `rel` joined to the session cwd; refuses paths that resolve outside it.
@@ -282,6 +295,10 @@ use action status with an id to check progress.",
     }
     let runs = collect(&app, &ids);
     let failed = runs.iter().all(|r| r.status != Status::Completed);
-    let result = ToolResult::text(render::final_text(&runs)).details(call_details(&runs, mode));
+    let mut details = call_details(&runs, mode);
+    if mode == "parallel" {
+        add_batch_fields(&mut details, &runs);
+    }
+    let result = ToolResult::text(render::final_text(&runs)).details(details);
     Ok(if failed { result.failed() } else { result })
 }

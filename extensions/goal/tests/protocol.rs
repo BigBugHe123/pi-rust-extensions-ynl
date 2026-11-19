@@ -83,6 +83,53 @@ async fn tracks_tasks_and_pauses() {
     assert!(failed, "task progress on a paused goal: {rejected}");
 }
 
+/// Paseo's pi-goal-x adapter reads `{ version: 3, goal: { currentTaskId?, taskList? } }`.
+#[tokio::test]
+async fn goal_tool_results_carry_the_task_list() {
+    let work = TestDir::new("details-work");
+    let agent = TestDir::new("details-agent");
+    let mut host = Host::start(work.path(), agent.path()).await;
+    let none = host.tool_result("get_goal", json!({})).await;
+    assert_eq!(none["details"], json!({ "version": 3, "goal": null }));
+    let created = host
+        .tool_result("create_goal", json!({ "objective": OBJECTIVE }))
+        .await;
+    let goal_id = created["details"]["goalId"].clone();
+    assert!(goal_id.is_string(), "{created}");
+    assert_eq!(
+        created["details"],
+        json!({ "goalId": goal_id, "version": 3, "goal": {} })
+    );
+    let tasks = json!({ "tasks": [{ "id": "t1", "title": TASK },
+        { "id": "t2", "title": "Check the links", "parent_id": "t1" }] });
+    let saved = host.tool_result("set_goal_tasks", tasks).await;
+    let tree = |t1: &str, t2: &str| {
+        json!({ "tasks": [{ "id": "t1", "title": TASK, "status": t1,
+            "subtasks": [{ "id": "t2", "title": "Check the links", "status": t2 }] }] })
+    };
+    assert_eq!(
+        saved["details"],
+        json!({ "version": 3, "goal": { "taskList": tree("pending", "pending") } })
+    );
+    let start = json!({ "task_id": "t2", "status": "start" });
+    let started = host.tool_result("update_goal_task", start).await;
+    let current = json!({ "version": 3,
+        "goal": { "currentTaskId": "t2", "taskList": tree("pending", "pending") } });
+    assert_eq!(started["details"], current);
+    let read = host
+        .tool_result("get_goal", json!({ "section": "tasks" }))
+        .await;
+    assert_eq!(read["details"], current);
+    let done = json!({ "task_id": "t2", "status": "complete", "evidence": "links checked" });
+    let done = host.tool_result("update_goal_task", done).await;
+    let finished = json!({ "version": 3, "goal": { "taskList": tree("pending", "complete") } });
+    assert_eq!(done["details"], finished);
+    let pause = json!({ "status": "paused", "reason": "The user asked to pause." });
+    let paused = host.tool_result("update_goal", pause).await;
+    assert!(paused.get("isError").is_none(), "{paused}");
+    assert_eq!(paused["details"], finished);
+}
+
 async fn submit(host: &mut Host) -> String {
     let done = json!({ "task_id": "t1", "status": "complete", "evidence": "notes.md written" });
     let (updated, failed) = host.tool("update_goal_task", done).await;

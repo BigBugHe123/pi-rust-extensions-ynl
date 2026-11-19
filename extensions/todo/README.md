@@ -1,6 +1,6 @@
 # pi-ext-todo
 
-Created 2026-10-30. Last updated 2026-11-04.
+Created 2026-10-30. Last updated 2026-11-19.
 
 A task list for pi, ported from `@juicesharp/rpiv-todo`, with ordered phases, subagent scopes, a widget above the editor, and a `/todos` panel. Run it with `pi-rust-ext todo`.
 
@@ -28,7 +28,7 @@ Added actions:
 | `set_goal` | `phase`, `goal` (empty clears) | `Set goal of phase P1: ...` |
 | `delete_phase` | `phase` | `Deleted phase P1: Design (2 tasks moved to no phase)` |
 
-Tasks without `phase` belong to no phase, so calls written for rpiv-todo work unchanged. A task that goes `in_progress` starts its pending phase. The current phase is the first phase in progress, else the first pending phase, else the last phase. `details` adds `phases` and `nextPhaseId` when phases exist, and `scope` in a subagent child.
+Tasks without `phase` belong to no phase, so calls written for rpiv-todo work unchanged. A task that goes `in_progress` starts its pending phase. The current phase is the first phase in progress, else the first pending phase, else the last phase. `details` adds `phases` and `nextPhaseId` when phases exist, and `scope` in a subagent child. For the added actions, `details.action` is `update` and `params.action` holds the action, because readers of rpiv-todo results, such as Paseo, accept only the six rpiv-todo actions.
 
 ## Command `/todos`
 

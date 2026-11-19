@@ -42,6 +42,9 @@ pub fn extension() -> Extension {
         .tool(tool::spec(), move |params: tool::Params, ctx: ToolCtx| {
             tool::execute(tool_app.clone(), params, ctx)
         })
+        .prepare_arguments("subagent", |args: Value, _host: Host| async move {
+            Ok(tool::prepare(args))
+        })
         .command(
             "agents",
             "Manage subagents in one panel: edit every field, new, copy, rename, move, delete or reset, and runs (`/agents runs`, `/agents list`, `/agents <name>`)",

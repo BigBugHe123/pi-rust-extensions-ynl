@@ -73,5 +73,11 @@ fn goal_continues_with_tasks_and_pauses() {
     assert!(tasks.contains("Task list saved (1 tasks)"), "{tasks}");
     let goal = output.tool_result_text("get_goal").unwrap_or_default();
     assert!(goal.contains(OBJECTIVE) && goal.contains(TASK), "{goal}");
+    let started = &output.tool_results("update_goal_task")[0]["result"]["details"];
+    let task_list = json!({ "tasks": [{ "id": "t1", "title": TASK, "status": "pending" }] });
+    assert_eq!(
+        *started,
+        json!({ "version": 3, "goal": { "currentTaskId": "t1", "taskList": task_list } })
+    );
     assert_eq!(output.final_text(), "Paused the goal.");
 }
