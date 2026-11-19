@@ -2,6 +2,16 @@
 
 All notable changes to pi-rust-extensions are documented here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, breaking changes bump the minor version.
 
+## [0.5.19] - 2026-11-19
+
+### Added
+
+- **background-tasks:** tasks survive pi restarts in RPC mode and re-attach ([a1b9edc](https://github.com/yannelli/pi-rust-extensions/commit/a1b9edc3bdd6ebf173223d56849cf9f14b1776fe))
+
+### Changed
+
+- **sdk:** ask pi for the boundary context only when a handler reads it ([00212f8](https://github.com/yannelli/pi-rust-extensions/commit/00212f8f4c103bdf50aa2452983f5739f1985e91))
+
 ## [0.5.18] - 2026-11-19
 
 ### Added
