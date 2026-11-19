@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::identity::{self, Owner};
+use crate::launch;
 use crate::process;
-use crate::task::{self, Status, Task, default_name, resolve_in};
+use crate::task::{self, EXIT_FILE, OUTPUT_FILE, Status, Task, default_name, resolve_in};
 
 const KILL_GRACE: Duration = Duration::from_secs(3);
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(700);
@@ -28,6 +29,17 @@ pub struct Registry {
     pub published: crate::active_work::Published,
     pub monitor_started: AtomicBool,
     widget: Mutex<WidgetMode>,
+    /// The binary of this extension, whose `--launch` starts tasks outside pi's process tree;
+    /// `None` starts them in this process.
+    launcher: Option<PathBuf>,
+}
+
+/// Whether `session_shutdown` with `reason` keeps the running tasks with `surviveReload`: on
+/// `reload`, and on `quit` in `rpc` mode (pi-rust's ACP mode binds extensions in `rpc` mode too)
+/// when the session has a file, so a client such as Paseo can start pi again on it. Any other
+/// quit and every session switch (`new`, `resume`, `fork`) stops all running tasks.
+pub fn keeps_survivors(reason: &str, mode: Option<&str>, resumable: bool) -> bool {
+    reason == "reload" || (reason == "quit" && mode == Some("rpc") && resumable)
 }
 
 /// How the widget below the editor shows running tasks.
@@ -47,6 +59,14 @@ struct Inner {
 }
 
 impl Registry {
+    /// A registry whose tasks start through `launcher --launch`.
+    pub fn with_launcher(launcher: PathBuf) -> Registry {
+        Registry {
+            launcher: Some(launcher),
+            ..Registry::default()
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner
             .lock()
@@ -93,7 +113,7 @@ impl Registry {
             .collect()
     }
 
-    pub fn start(&self, options: StartOptions, cwd: &str) -> Result<Task, String> {
+    pub async fn start(&self, options: StartOptions, cwd: &str) -> Result<Task, String> {
         let base = self.lock().dir.clone().ok_or("no session directory yet")?;
         let id = task::new_id();
         let dir = base.join(&id);
@@ -123,18 +143,17 @@ impl Registry {
             status: Status::Running,
             exit_code: None,
             notified: false,
+            notice_sent_at: None,
             error: None,
         };
-        let spawned = process::spawn(
-            &task.command,
-            Path::new(cwd),
-            &task.output_path(),
-            &task.exit_path(),
-        );
-        match spawned {
-            Ok(pid) => {
+        let detach = task.survive_reload;
+        match self
+            .spawn(&task.command, Path::new(cwd), &task.dir, detach)
+            .await
+        {
+            Ok((pid, process_start)) => {
                 task.pid = Some(pid);
-                task.process_start = identity::identity(pid).ok().flatten();
+                task.process_start = process_start;
             }
             Err(err) => {
                 let _ = std::fs::remove_dir_all(&task.dir);
@@ -145,6 +164,37 @@ impl Registry {
             .map_err(|e| format!("cannot save task state: {e}"))?;
         self.lock().tasks.push(task.clone());
         Ok(task)
+    }
+
+    /// Starts the wrapper of `command` through the launcher when `detach` (a task that survives
+    /// reloads and pi restarts), else in this process, so a kill of pi's process tree ends it.
+    /// Without a launcher, or when it did not start the task, it starts here. Returns the pid and
+    /// its start time.
+    async fn spawn(
+        &self,
+        command: &str,
+        cwd: &Path,
+        dir: &Path,
+        detach: bool,
+    ) -> Result<(u32, Option<String>), String> {
+        if let Some(launcher) = self.launcher.as_ref().filter(|_| detach) {
+            match launch::start(launcher, dir, cwd, command).await {
+                Ok(launched) => {
+                    let pid = launched.pid;
+                    let start = launched
+                        .process_start
+                        .or_else(|| identity::identity(pid).ok().flatten());
+                    return Ok((pid, start));
+                }
+                Err(launch::Failure::Unknown(err)) => return Err(err),
+                Err(launch::Failure::NotStarted(err)) => pi_ext_sdk::warn!(
+                    "the task launcher did not start `{command}`, so it runs in this process and ends with pi: {err}"
+                ),
+            }
+        }
+        let pid = process::spawn(command, cwd, &dir.join(OUTPUT_FILE), &dir.join(EXIT_FILE))
+            .map_err(|err| err.to_string())?;
+        Ok((pid, identity::identity(pid).ok().flatten()))
     }
 
     /// Finds a task by id or by an unambiguous id prefix.
@@ -280,11 +330,20 @@ impl Registry {
         });
     }
 
+    /// The session holds the task's notification, or none is owed any more.
     pub fn mark_notified(&self, id: &str) {
         self.update(id, |t| {
             t.notified = true;
             true
         });
+    }
+
+    /// Records when the task's notification was sent; `None` undoes a send that pi refused.
+    pub fn set_notice_sent(&self, id: &str, at: Option<u64>) -> Option<Task> {
+        self.update(id, |t| {
+            t.notice_sent_at = at;
+            true
+        })
     }
 
     /// Removes finished tasks and their output; returns how many it removed.
@@ -301,12 +360,12 @@ impl Registry {
         before - inner.tasks.len()
     }
 
-    /// `session_shutdown`: on reload keep tasks that survive reloads, else stop all running tasks.
-    pub async fn shutdown(&self, reason: &str) -> usize {
-        let reload = reason == "reload";
+    /// `session_shutdown`: stops the running tasks, except those with `surviveReload` when
+    /// `keep` ([`keeps_survivors`]). Returns how many it stopped.
+    pub async fn shutdown(&self, reason: &str, keep: bool) -> usize {
         let mut victims = Vec::new();
         for task in self.running() {
-            if reload && task.survive_reload {
+            if keep && task.survive_reload {
                 continue;
             }
             if task.pid.is_some() && self.settle_unowned(&task) {

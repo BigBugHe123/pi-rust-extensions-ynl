@@ -163,7 +163,7 @@ pub fn register(ext: Extension, registry: Arc<Registry>) -> Extension {
                     trigger_on_completion: false,
                     ..StartOptions::default()
                 };
-                match registry.start(options, &ctx.snapshot().cwd) {
+                match registry.start(options, &ctx.snapshot().cwd).await {
                     Ok(task) => {
                         let _ = ui::refresh(ctx.host(), &registry).await;
                         report(ctx.host(), started_text(&task), false).await

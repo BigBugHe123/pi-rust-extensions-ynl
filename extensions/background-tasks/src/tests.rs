@@ -60,6 +60,7 @@ pub fn sample(id: &str, status: Status) -> Task {
         status,
         exit_code: None,
         notified: false,
+        notice_sent_at: None,
         error: None,
     }
 }
@@ -145,6 +146,24 @@ fn task_state_round_trips_and_finishes_once() {
     assert!(task.finish(Status::Failed, Some(2)));
     assert!(!task.finish(Status::Completed, Some(0)));
     assert_eq!((task.status, task.exit_code), (Status::Failed, Some(2)));
+}
+
+#[test]
+fn task_json_stays_backward_compatible() {
+    // task.json as versions before `noticeSentAt` wrote it.
+    let old = r#"{"id":"a1","name":"t","command":"true","cwd":"/","isAgent":false,"pid":7,
+        "dir":"/x/a1","startedAt":1,"endedAt":2,"timeoutSeconds":null,"notifyOnCompletion":true,
+        "triggerOnCompletion":true,"surviveReload":true,"status":"completed","exitCode":0,
+        "notified":true}"#;
+    let task: Task = serde_json::from_str(old).unwrap();
+    assert_eq!((task.notified, task.notice_sent_at), (true, None));
+    let json = serde_json::to_value(&task).unwrap();
+    assert!(json.get("noticeSentAt").is_none(), "{json}");
+    let mut sent = task;
+    sent.notice_sent_at = Some(1_234);
+    let json = serde_json::to_value(&sent).unwrap();
+    assert_eq!(json["noticeSentAt"], 1_234);
+    assert_eq!(serde_json::from_value::<Task>(json).unwrap(), sent);
 }
 
 #[test]

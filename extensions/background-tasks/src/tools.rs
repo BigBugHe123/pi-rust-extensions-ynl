@@ -194,7 +194,7 @@ pub fn register(ext: Extension, registry: Arc<Registry>) -> Extension {
             } else {
                 cwd
             };
-            match registry.start(args.into_options(), &cwd) {
+            match registry.start(args.into_options(), &cwd).await {
                 Ok(task) => {
                     let _ = ui::refresh(ctx.host(), &registry).await;
                     Ok(ToolResult::text(started_text(&task)).details(&task))
