@@ -6,7 +6,7 @@ mod common;
 
 use std::os::unix::fs::PermissionsExt;
 
-use pi_ext_e2e::{Run, TempDir, Turn, cargo_bin, json, pi_bin_or_skip};
+use pi_ext_e2e::{Run, TempDir, Turn, Value, cargo_bin, json, pi_bin_or_skip};
 
 #[test]
 fn subagent_tool_runs_child_with_session_model() {
@@ -49,6 +49,47 @@ fn subagent_tool_runs_child_with_session_model() {
     let env = std::fs::read_to_string(fake_dir.path().join("env")).unwrap();
     assert!(env.contains("PI_TODO_SCOPE="), "{env}");
     assert_eq!(output.final_text(), "Done.");
+}
+
+#[test]
+fn run_action_passes_validation_and_parallel_tasks_report_a_batch() {
+    if pi_bin_or_skip().is_none() {
+        return;
+    }
+    let fake_dir = TempDir::new().unwrap();
+    let fake = common::fake_pi(fake_dir.path(), &common::scripted_events("ok"), 0);
+    let output = Run::new(cargo_bin("pi-rust-ext", "pi-rust-ext"))
+        .args(["subagents"])
+        .env("PI_BIN", fake.display().to_string())
+        .turns([
+            Turn::tool_call(
+                "subagent",
+                json!({"action": "run", "agent": "explore", "task": "Find main"}),
+            ),
+            Turn::tool_call(
+                "subagent",
+                json!({"tasks": [{"task": "one"}, {"agent": "build", "task": "two"}]}),
+            ),
+            Turn::text("Done."),
+        ])
+        .prompt("Where is main?")
+        .run()
+        .unwrap();
+    assert!(output.status.success(), "{}", output.stderr);
+    let results = output.tool_results("subagent");
+    assert_eq!(results.len(), 2, "{}", output.stderr);
+    assert_ne!(results[0]["isError"], true, "{}", results[0]);
+    assert_eq!(results[0]["result"]["content"][0]["text"], "ok");
+    // pi passes the batch fields through to the `tool_execution_end` event that Paseo reads.
+    let details = &results[1]["result"]["details"];
+    assert_eq!(details["status"], "batch", "{details}");
+    let children = details["children"].as_array().unwrap();
+    let agents: Vec<&Value> = children.iter().map(|c| &c["agent"]).collect();
+    assert_eq!(agents, [&json!("explore"), &json!("build")]);
+    for (child, run) in children.iter().zip(details["runs"].as_array().unwrap()) {
+        assert_eq!(child["status"], "completed", "{child}");
+        assert_eq!(child["sessionFile"], run["sessionFile"], "{child}");
+    }
 }
 
 #[test]

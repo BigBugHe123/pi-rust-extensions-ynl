@@ -198,3 +198,23 @@ pub fn call_details(runs: &[Run], mode: &str) -> Value {
     }
     details
 }
+
+/// Adds the batch fields of the edxeth/pi-subagents result, `status: "batch"` and `children`,
+/// when every run wrote its session file. Paseo then shows each child and its session. Only
+/// for finished foreground calls: for a background batch Paseo waits for `subagent_result`
+/// messages, which this extension does not send.
+pub fn add_batch_fields(details: &mut Value, runs: &[Run]) {
+    if !runs.iter().all(|r| r.session_file.is_file()) {
+        return;
+    }
+    details["status"] = json!("batch");
+    details["children"] = runs
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.id, "name": r.agent, "agent": r.agent, "task": r.task,
+                "status": r.status, "sessionFile": r.session_file,
+            })
+        })
+        .collect();
+}
