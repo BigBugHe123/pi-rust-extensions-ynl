@@ -72,6 +72,8 @@ pub struct EventCtx {
     pub(crate) base: Base,
     pub(crate) name: String,
     pub(crate) event: Arc<Value>,
+    /// The `eventId` of a `turn_end` or `agent_before_settle` request, for [`Self::context`].
+    pub(crate) event_id: Option<Value>,
 }
 
 impl EventCtx {
@@ -88,6 +90,20 @@ impl EventCtx {
 
     pub fn event_as<T: DeserializeOwned>(&self) -> Result<T> {
         T::deserialize(self.event.as_ref()).map_err(Error::invalid_params)
+    }
+
+    /// The `context` of a `turn_end` or `agent_before_settle` event, a preview of the whole model
+    /// context: the one the event carries, else asked from pi, which builds it only then (feature
+    /// `contextEvents`). `None` for other events.
+    pub async fn context(&self) -> Result<Option<Value>> {
+        if let Some(context) = self.event.get("context") {
+            return Ok(Some(context.clone()));
+        }
+        let Some(event_id) = &self.event_id else {
+            return Ok(None);
+        };
+        let params = serde_json::json!({ "eventId": event_id });
+        self.host().call("event.context", params).await.map(Some)
     }
 
     /// Reads one field of the event, for example `ev.get("toolName")`.

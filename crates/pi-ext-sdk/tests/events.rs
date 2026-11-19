@@ -168,3 +168,56 @@ async fn entries_of_filters_branch() {
     assert_eq!(host.expect_response(4).await["result"], Value::Null);
     host.finish().await.unwrap();
 }
+
+#[tokio::test]
+async fn boundary_context_comes_from_the_event_or_from_pi() {
+    let ext = Extension::new("settle").on("agent_before_settle", |ev: EventCtx| async move {
+        let context = ev.context().await?.unwrap_or(Value::Null);
+        let count = context["contextMessages"].as_array().map_or(0, Vec::len);
+        Ok(EventReply::result(json!({ "messages": count })))
+    });
+    let mut host = TestHost::start(ext);
+    host.initialize().await;
+    // pi sent the context with the event.
+    let pushed =
+        json!({ "type": "agent_before_settle", "context": { "contextMessages": [{}, {}] } });
+    host.request(
+        1,
+        "event",
+        json!({ "name": "agent_before_settle", "event": pushed, "ctx": ctx(), "eventId": 7 }),
+    )
+    .await;
+    assert_eq!(
+        host.expect_response(1).await["result"]["result"],
+        json!({ "messages": 2 })
+    );
+    // pi left it out: the handler asks for it with the event id.
+    let bare = json!({ "type": "agent_before_settle" });
+    host.request(
+        2,
+        "event",
+        json!({ "name": "agent_before_settle", "event": bare, "ctx": ctx(), "eventId": 8 }),
+    )
+    .await;
+    let (id, params) = host.expect_request("event.context").await;
+    assert_eq!(params, json!({ "eventId": 8 }));
+    host.answer(&id, json!({ "contextMessages": [{}, {}, {}] }))
+        .await;
+    assert_eq!(
+        host.expect_response(2).await["result"]["result"],
+        json!({ "messages": 3 })
+    );
+    // Other events have no context.
+    let other = json!({ "type": "agent_before_settle" });
+    host.request(
+        3,
+        "event",
+        json!({ "name": "agent_before_settle", "event": other, "ctx": ctx() }),
+    )
+    .await;
+    assert_eq!(
+        host.expect_response(3).await["result"]["result"],
+        json!({ "messages": 0 })
+    );
+    host.finish().await.unwrap();
+}

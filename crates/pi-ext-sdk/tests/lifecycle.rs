@@ -113,6 +113,28 @@ async fn initialize_returns_registrations() {
 }
 
 #[tokio::test]
+async fn boundary_subscribers_send_an_empty_context_events_list() {
+    let noop = |_: EventCtx| async { Ok(EventReply::none()) };
+    let cases = [
+        (Extension::new("plain").on("tool_call", noop), None),
+        (
+            Extension::new("turns").on("turn_end", noop),
+            Some(json!([])),
+        ),
+        (
+            Extension::new("settle").on("agent_before_settle", noop),
+            Some(json!([])),
+        ),
+    ];
+    for (ext, expected) in cases {
+        let mut host = TestHost::start(ext);
+        let result = host.initialize().await;
+        assert_eq!(result.get("contextEvents").cloned(), expected, "{result}");
+        host.finish().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn minimal_initialize_has_only_protocol_version() {
     let mut host = TestHost::start(Extension::new("empty"));
     assert_eq!(host.initialize().await, json!({ "protocolVersion": 1 }));
