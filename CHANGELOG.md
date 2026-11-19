@@ -2,6 +2,12 @@
 
 All notable changes to pi-rust-extensions are documented here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, breaking changes bump the minor version.
 
+## [0.5.18] - 2026-11-19
+
+### Added
+
+- **subagents:** background runs survive pi restarts and re-attach ([cde8602](https://github.com/yannelli/pi-rust-extensions/commit/cde8602466a0f07e3d258f98e8529090cc4c9861))
+
 ## [0.5.17] - 2026-11-19
 
 ### Fixed
