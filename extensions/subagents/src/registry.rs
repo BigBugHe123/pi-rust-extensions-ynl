@@ -1,5 +1,5 @@
-//! Agent definitions: built-in defaults, then `<agentDir>/ext/subagents/agents/*.md`, then
-//! `<cwd>/.pi/ext/subagents/agents/*.md`. Later layers override earlier ones per field.
+//! Agent definitions: built-ins, Pi Web's legacy agent directories, then the native
+//! subagents directories. Later layers override earlier ones per field.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -15,6 +15,20 @@ pub fn agents_dir(base: &Path) -> PathBuf {
 /// `<project_base>/ext/subagents/agents`, or the main checkout's copy in a git worktree that lacks it.
 pub fn project_agents_dir(project_base: &Path) -> PathBuf {
     pi_ext_sdk::paths::project_path(project_base, "ext/subagents/agents")
+}
+
+fn legacy_global_agents_dir(native_global: &Path) -> Option<PathBuf> {
+    native_global.ancestors().nth(3).map(|base| base.join("agents"))
+}
+
+pub(crate) fn legacy_project_agents_dirs(native_project: &Path) -> Vec<PathBuf> {
+    let Some(pi_dir) = native_project.ancestors().nth(3) else {
+        return Vec::new();
+    };
+    let Some(cwd) = pi_dir.parent() else {
+        return Vec::new();
+    };
+    vec![cwd.join(".agents/agents"), pi_dir.join("agents")]
 }
 
 #[derive(Debug, Clone)]
@@ -43,11 +57,26 @@ impl Layers {
 
 pub fn load(layers: &Layers) -> Vec<AgentDef> {
     let mut agents = builtin_agents();
+    if let Some(legacy) = legacy_global_agents_dir(&layers.global) {
+        merge_dir(&mut agents, &legacy, Source::Global);
+    }
     merge_dir(&mut agents, &layers.global, Source::Global);
     if let Some(project) = &layers.project {
+        for legacy in legacy_project_agents_dirs(project) {
+            merge_dir(&mut agents, &legacy, Source::Project);
+        }
         merge_dir(&mut agents, project, Source::Project);
     }
     agents
+}
+
+/// Whether any project-scoped agent directory contains profiles that require trust.
+pub fn has_project_agents(project: &Path) -> bool {
+    let native = project_agents_dir(project);
+    native.is_dir()
+        || legacy_project_agents_dirs(&native)
+            .iter()
+            .any(|dir| dir.is_dir())
 }
 
 pub fn merge_dir(agents: &mut Vec<AgentDef>, dir: &Path, source: Source) {

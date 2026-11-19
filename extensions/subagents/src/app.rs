@@ -40,8 +40,8 @@ impl App {
 
     pub fn agents(&self, host: &Host) -> Vec<AgentDef> {
         let layers = self.layers(host);
-        if layers.project.is_none() && registry::project_agents_dir(&host.project_dir()).is_dir() {
-            self.warn_untrusted(host, "project agents in .pi/ext/subagents/agents");
+        if layers.project.is_none() && registry::has_project_agents(&host.project_dir()) {
+            self.warn_untrusted(host, "project subagent profiles");
         }
         registry::load(&layers)
     }
