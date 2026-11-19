@@ -25,10 +25,7 @@ pub(crate) fn legacy_project_agents_dirs(native_project: &Path) -> Vec<PathBuf> 
     let Some(pi_dir) = native_project.ancestors().nth(3) else {
         return Vec::new();
     };
-    let Some(cwd) = pi_dir.parent() else {
-        return Vec::new();
-    };
-    vec![cwd.join(".agents/agents"), pi_dir.join("agents")]
+    vec![pi_dir.join("agents")]
 }
 
 #[derive(Debug, Clone)]
