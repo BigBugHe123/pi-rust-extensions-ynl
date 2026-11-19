@@ -398,8 +398,10 @@ async fn cancel_kills_the_child() {
     host.finish().await;
 }
 
+/// Runs that stay in pi (no runner binary here, or a session without an id) still end with it;
+/// `tests/detached.rs` covers the detached runs that outlive it.
 #[tokio::test]
-async fn shutdown_kills_a_child_that_ignores_sigterm() {
+async fn shutdown_kills_an_in_process_child_that_ignores_sigterm() {
     let d = dirs(&scripted_events("never"), 30);
     let script = std::fs::read_to_string(d.fake.join("fake-pi")).unwrap();
     let script = script.replacen("#!/bin/sh\n", "#!/bin/sh\ntrap '' TERM\n", 1);

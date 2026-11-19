@@ -236,6 +236,12 @@ async fn run(app: App, params: Params, ctx: ToolCtx) -> Result<ToolResult> {
         limit: Arc::new(Semaphore::new(config.max_parallel)),
         changed: Arc::new(Notify::new()),
     };
+    let detached = if background {
+        crate::detached::launch(&app, &ctx, &launch, &jobs, mode).await
+    } else {
+        None
+    };
+    let jobs = if detached.is_some() { Vec::new() } else { jobs };
     let started: Vec<Started> = jobs
         .into_iter()
         .map(|job| {
@@ -247,22 +253,25 @@ async fn run(app: App, params: Params, ctx: ToolCtx) -> Result<ToolResult> {
             jobs::start(&app, &host, &launch, job, background, cancel)
         })
         .collect();
-    let ids: Vec<String> = started.iter().map(|s| s.id.clone()).collect();
+    let ids: Vec<String> =
+        detached.unwrap_or_else(|| started.iter().map(|s| s.id.clone()).collect());
     if background {
         let runs = collect(&app, &ids);
         let async_dir = runs
             .first()
             .map(|run| run.dir().to_path_buf())
             .unwrap_or_default();
-        store::write_status(&async_dir, &runs);
         app.start_widget(&host);
-        tokio::spawn(report_when_done(
-            app.clone(),
-            host,
-            mode,
-            async_dir.clone(),
-            started,
-        ));
+        if !started.is_empty() {
+            store::write_status(&async_dir, &runs);
+            tokio::spawn(report_when_done(
+                app.clone(),
+                host,
+                mode,
+                async_dir.clone(),
+                started,
+            ));
+        }
         let text = format!(
             "Started {} background subagent run(s): {}. The results arrive as a message when they finish; \
 use action status with an id to check progress.",

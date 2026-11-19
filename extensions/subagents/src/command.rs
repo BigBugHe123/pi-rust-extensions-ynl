@@ -2,6 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::agent::{AgentDef, PromptMode};
 use crate::messaging;
 
@@ -19,7 +21,8 @@ pub struct Overrides {
     pub thinking: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChildSpec {
     pub program: PathBuf,
     pub args: Vec<String>,

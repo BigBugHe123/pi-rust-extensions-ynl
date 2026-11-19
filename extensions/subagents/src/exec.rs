@@ -1,5 +1,7 @@
 //! Runs one child pi process and streams its events into the run registry.
 
+use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -7,12 +9,17 @@ use pi_ext_sdk::CancellationToken;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::{Child, Command};
 
+use crate::call::{EVENTS_FILE, STDERR_FILE};
 use crate::command::ChildSpec;
 use crate::runs::{Runs, Status};
 use crate::stream::Effect;
 
 const STDERR_CAP: usize = 16 * 1024;
 const KILL_GRACE: Duration = Duration::from_secs(1);
+/// How often a runner reads new lines of a child's `events.jsonl`.
+const TAIL_EVERY: Duration = Duration::from_millis(100);
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// How long shutdown waits for cancelled runs: above `KILL_GRACE`, below the SDK's 1.5 s limit.
 pub const SHUTDOWN_WAIT: Duration = Duration::from_millis(1400);
 
@@ -81,6 +88,135 @@ pub async fn execute(
     if let Some(task) = stderr_task {
         let _ = tokio::time::timeout(Duration::from_secs(1), task).await;
     }
+    exit_status(runs, id, exit)
+}
+
+/// Runs the child of a detached call: stdout goes to `<dir>/events.jsonl` and stderr to
+/// `<dir>/stderr.log`, files that do not depend on the runner, and the events fold into the run
+/// as the file grows. The child is not killed when the runner drops it.
+pub async fn execute_to_files(
+    spec: &ChildSpec,
+    runs: &Runs,
+    id: &str,
+    cancel: &CancellationToken,
+    dir: &Path,
+    on_effect: &mut (dyn FnMut(Effect) + Send),
+) -> Status {
+    runs.update(id, |run| run.model = spec.model.clone());
+    let (events, stderr) = (dir.join(EVENTS_FILE), dir.join(STDERR_FILE));
+    let files = std::fs::create_dir_all(dir).and_then(|()| {
+        Ok((
+            std::fs::File::create(&events)?,
+            std::fs::File::create(&stderr)?,
+        ))
+    });
+    let (stdout_file, stderr_file) = match files {
+        Ok(files) => files,
+        Err(err) => {
+            let message = format!("cannot write {}: {err}", dir.display());
+            runs.update(id, |run| run.progress.error = Some(message));
+            return Status::Failed;
+        }
+    };
+    let mut command = Command::new(&spec.program);
+    command
+        .args(&spec.args)
+        .envs(spec.env.iter().map(|(k, v)| (k, v)))
+        .current_dir(&spec.cwd)
+        .stdin(Stdio::null())
+        .stdout(stdout_file)
+        .stderr(stderr_file);
+    #[cfg(unix)]
+    command.process_group(0);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            let message = format!("cannot start {}: {err}", spec.program.display());
+            runs.update(id, |run| run.progress.error = Some(message));
+            return Status::Failed;
+        }
+    };
+    let mut tail = Tail::default();
+    let exit = loop {
+        tail.read(&events, &mut |line| fold(runs, id, line, on_effect));
+        tokio::select! {
+            _ = cancel.cancelled() => break None,
+            exit = child.wait() => break Some(exit),
+            _ = tokio::time::sleep(TAIL_EVERY) => {}
+        }
+    };
+    if exit.is_none() {
+        stop(&mut child).await;
+    }
+    tail.read(&events, &mut |line| fold(runs, id, line, on_effect));
+    tail.finish(&mut |line| fold(runs, id, line, on_effect));
+    let stderr_tail = read_tail(&stderr, STDERR_CAP);
+    runs.update(id, |run| run.stderr = stderr_tail);
+    match exit {
+        None => Status::Cancelled,
+        Some(exit) => exit_status(runs, id, exit),
+    }
+}
+
+fn fold(runs: &Runs, id: &str, line: &str, on_effect: &mut (dyn FnMut(Effect) + Send)) {
+    let effect = runs.update(id, |run| run.progress.apply_line(line));
+    if let Some(effect) = effect.filter(|e| *e != Effect::None) {
+        on_effect(effect);
+    }
+}
+
+/// The new complete lines of a growing file, from where the last read stopped.
+#[derive(Default)]
+struct Tail {
+    offset: u64,
+    partial: Vec<u8>,
+}
+
+impl Tail {
+    fn read(&mut self, path: &Path, on_line: &mut dyn FnMut(&str)) {
+        let Ok(mut file) = std::fs::File::open(path) else {
+            return;
+        };
+        let mut bytes = Vec::new();
+        if file.seek(SeekFrom::Start(self.offset)).is_err() || file.read_to_end(&mut bytes).is_err()
+        {
+            return;
+        }
+        self.offset += bytes.len() as u64;
+        self.partial.extend_from_slice(&bytes);
+        while let Some(end) = self.partial.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = self.partial.drain(..=end).collect();
+            on_line(&String::from_utf8_lossy(&line));
+        }
+    }
+
+    /// The last line, when the child ended without a newline.
+    fn finish(&mut self, on_line: &mut dyn FnMut(&str)) {
+        if !self.partial.is_empty() {
+            on_line(&String::from_utf8_lossy(&std::mem::take(&mut self.partial)));
+        }
+    }
+}
+
+/// The last `cap` bytes of a file, from a character boundary.
+fn read_tail(path: &Path, cap: usize) -> String {
+    let mut bytes = Vec::new();
+    let read = std::fs::File::open(path).and_then(|mut file| {
+        let len = file.metadata()?.len();
+        file.seek(SeekFrom::Start(len.saturating_sub(cap as u64)))?;
+        file.read_to_end(&mut bytes)
+    });
+    if read.is_err() {
+        return String::new();
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    text.trim_start_matches('\u{fffd}').to_owned()
+}
+
+/// `Completed` for exit code 0 without a model error, else `Failed`.
+fn exit_status(runs: &Runs, id: &str, exit: std::io::Result<std::process::ExitStatus>) -> Status {
     let code = exit.ok().and_then(|status| status.code());
     let failed = runs
         .update(id, |run| {
@@ -116,11 +252,20 @@ async fn collect_stderr(stderr: impl AsyncReadExt + Unpin, runs: &Runs, id: &str
     }
 }
 
-/// SIGTERM to the child's process group, then SIGKILL after `KILL_GRACE` (inside the SDK cancel window).
+/// SIGTERM to the child's process group, then SIGKILL after `KILL_GRACE` (inside the SDK cancel
+/// window). Windows has no SIGTERM: `taskkill /T /F` ends the child's process tree at once.
 async fn stop(child: &mut Child) {
     #[cfg(unix)]
     if let Some(pid) = child.id() {
         let _ = group_signal_command("-TERM", pid).status();
+    }
+    #[cfg(windows)]
+    if let Some(pid) = child.id() {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
     if tokio::time::timeout(KILL_GRACE, child.wait())
         .await

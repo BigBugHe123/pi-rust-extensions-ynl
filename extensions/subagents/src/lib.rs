@@ -8,16 +8,19 @@ pub mod actions;
 pub mod active_work;
 pub mod agent;
 pub mod app;
+pub mod call;
 pub mod command;
 pub mod config;
 pub mod context;
 pub mod defaults;
+pub mod detached;
 pub mod exec;
 pub mod frontmatter;
 pub mod jobs;
 pub mod messaging;
 pub mod registry;
 pub mod render;
+pub mod runner;
 pub mod runs;
 pub mod runs_panel;
 pub mod store;
@@ -27,8 +30,15 @@ pub mod ui;
 
 use app::App;
 
+/// The extension's name, and its first argument of `pi-rust-ext`.
+pub const NAME: &str = "subagents";
+
+/// The extension with every run in this process.
 pub fn extension() -> Extension {
-    let app = App::default();
+    build(App::default())
+}
+
+fn build(app: App) -> Extension {
     let tool_app = app.clone();
     let command_app = app.clone();
     let complete_app = app.clone();
@@ -37,8 +47,9 @@ pub fn extension() -> Extension {
     let surface_app = app.clone();
     let sync_app = app.clone();
     let messaging_app = app.clone();
+    let detached_app = app.clone();
     let shutdown_app = app;
-    Extension::new("subagents")
+    Extension::new(NAME)
         .tool(tool::spec(), move |params: tool::Params, ctx: ToolCtx| {
             tool::execute(tool_app.clone(), params, ctx)
         })
@@ -81,13 +92,15 @@ pub fn extension() -> Extension {
         })
         .on_start(move |host: Host| active_work::serve(sync_app.clone(), host))
         .on_start(move |host: Host| messaging::serve(messaging_app.clone(), host))
+        .on_start(move |host: Host| detached::serve(detached_app.clone(), host))
         .on_shutdown(move |host: Host| {
             let app = shutdown_app.clone();
             async move {
                 messaging::close(&host);
-                app.runs.cancel_all();
+                app.runs.cancel_in_process();
                 let deadline = tokio::time::Instant::now() + exec::SHUTDOWN_WAIT;
-                while app.runs.any_running() && tokio::time::Instant::now() < deadline {
+                while app.runs.any_in_process_running() && tokio::time::Instant::now() < deadline
+                {
                     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 }
                 Ok(())
@@ -95,8 +108,18 @@ pub fn extension() -> Extension {
         })
 }
 
+/// `pi-rust-ext subagents`: the extension, whose `async` calls in a session with an id run
+/// detached; `--detach <dir>` and `--runner <dir>` start and run such a call.
 pub fn main() -> ExitCode {
-    extension().run()
+    let args: Vec<String> = std::env::args().collect();
+    let dir = args.get(3).map(String::as_str);
+    match args.get(2).map(String::as_str) {
+        Some(runner::DETACH_FLAG) => return runner::detach(dir),
+        Some(runner::RUNNER_FLAG) => return runner::main(dir),
+        _ => {}
+    }
+    let app = std::env::current_exe().map_or_else(|_| App::default(), App::with_runner);
+    build(app).run()
 }
 
 async fn agents_command(app: App, args: String, ctx: CommandCtx) -> Result<()> {
