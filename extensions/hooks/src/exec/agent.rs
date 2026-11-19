@@ -78,7 +78,8 @@ pub async fn run_agent(
         cwd: cwd.to_path_buf(),
         env: Vec::new(),
         timeout,
-        login_shell: false,
+        shell: Default::default(),
+        shell_path: None,
     };
     let run = run_command(spec).await;
     if run.code != Some(0) {

@@ -265,7 +265,8 @@ fn codex_layers_and_hook_state() {
     );
     write(
         &f.paths.codex_home.join("config.toml"),
-        &format!("[hooks.state.\"{key}\"]\nenabled = false\n"),
+        // A literal (single-quoted) key: Windows paths have backslashes, which are escapes in `"..."`.
+        &format!("[hooks.state.'{key}']\nenabled = false\n"),
     );
     let loaded = load(&LoadInput {
         paths: &f.paths,

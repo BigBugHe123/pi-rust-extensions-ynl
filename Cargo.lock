@@ -877,6 +877,7 @@ name = "pi-ext-hooks"
 version = "0.5.19"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "pi-ext-e2e",
  "pi-ext-sdk",
  "regex",
