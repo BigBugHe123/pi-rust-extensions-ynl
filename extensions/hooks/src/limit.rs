@@ -48,7 +48,7 @@ impl SessionSlots {
     }
 }
 
-/// The slots that the prompt and agent hooks of one event share.
+/// The slots that the sync prompt and agent hooks of one event share.
 #[derive(Clone)]
 pub struct Gate {
     event: Arc<Semaphore>,
@@ -65,7 +65,7 @@ impl Gate {
     }
 }
 
-/// Runs `hook`. A prompt or agent hook first waits for an event slot and a session slot.
+/// Runs a sync `hook`. A prompt or agent hook first waits for an event slot and a session slot.
 pub async fn run<T>(gate: Option<&Gate>, def: &HookDef, hook: impl Future<Output = T>) -> T {
     let limited = matches!(def.kind(), "prompt" | "agent");
     run_with(gate.filter(|_| limited), def.timeout(), hook).await

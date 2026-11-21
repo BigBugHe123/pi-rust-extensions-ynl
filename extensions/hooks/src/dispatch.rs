@@ -138,7 +138,7 @@ pub async fn dispatch(
         let input = hook_input(snap, &d, &def, rt);
         let sync_end = def.source.is_codex() && def.event == "SessionEnd";
         if def.is_async() && !sync_end {
-            spawn_async(rt.clone(), cx.clone(), gate.clone(), def, input);
+            spawn_async(rt.clone(), cx.clone(), def, input);
             continue;
         }
         let (cx, gate) = (cx.clone(), gate.clone());
@@ -346,18 +346,12 @@ async fn timed(cx: &Context, def: &HookDef, input: String) -> (RawRun, std::time
     (exec::run(cx, def, input).await, started.elapsed())
 }
 
-fn spawn_async(
-    rt: Arc<Runtime>,
-    cx: Arc<Context>,
-    gate: Option<Gate>,
-    def: HookDef,
-    input: String,
-) {
+fn spawn_async(rt: Arc<Runtime>, cx: Arc<Context>, def: HookDef, input: String) {
     tokio::spawn(async move {
         let Ok(_permit) = rt.async_slots.clone().acquire_owned().await else {
             return;
         };
-        let (mut raw, elapsed) = limit::run(gate.as_ref(), &def, timed(&cx, &def, input)).await;
+        let (mut raw, elapsed) = timed(&cx, &def, input).await;
         if !def.source.is_codex() {
             raw.stdout = async_json_line(&raw.stdout);
         }
