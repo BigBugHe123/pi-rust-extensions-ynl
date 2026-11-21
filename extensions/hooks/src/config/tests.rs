@@ -274,9 +274,14 @@ fn force_enabled_plugin_hooks_pass_claude_gates() {
     managed(json!({ "allowManagedHooksOnly": true }));
     assert_eq!(commands(&load_with(&f, true)), forced);
     managed(json!({}));
+    let other = r#""enabledPlugins":{"fmt@other":true}"#;
     write(
         &f.paths.claude_dir.join("settings.json"),
-        r#"{"disableAllHooks":true}"#,
+        &format!(r#"{{"disableAllHooks":true,{other}}}"#),
+    );
+    write(
+        &f.cwd.join(".claude/settings.json"),
+        &format!("{{{other}}}"),
     );
     assert_eq!(commands(&load_with(&f, true)), forced);
     managed(json!({ "disableAllHooks": true }));

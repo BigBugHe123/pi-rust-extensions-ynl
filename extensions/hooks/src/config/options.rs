@@ -53,7 +53,7 @@ pub struct Switch {
 pub const SWITCHES: &[Switch] = &[Switch {
     key: "managed/forceEnabledPlugins",
     label: "Force-enabled plugin hooks",
-    about: "Run hooks of plugins that Claude managed enabledPlugins sets to true, under allowManagedHooksOnly or a user disableAllHooks.",
+    about: "Run hooks of plugins that Claude managed enabledPlugins sets to true, under allowManagedHooksOnly or a non-managed disableAllHooks.",
     default: true,
 }];
 
