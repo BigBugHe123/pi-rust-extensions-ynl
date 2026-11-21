@@ -167,6 +167,36 @@ async fn managed_claude_hooks_survive_user_disable_all_hooks() {
 }
 
 #[tokio::test]
+async fn server_managed_copy_hooks_need_trust() {
+    let env = env();
+    let server = script(&env, "server", DENY);
+    let file = script(&env, "file", ALLOW);
+    write_json(
+        &env.paths.claude_dir.join("remote-settings.json"),
+        json!({ "managedSourcesBehavior": "merge", "hooks": bash_hooks(command(&server)) }),
+    );
+    let policy = env.paths.claude_policy.clone().unwrap();
+    write_json(
+        &policy.join("managed-settings.json"),
+        json!({ "hooks": bash_hooks(command(&file)) }),
+    );
+    let mut host = TestHost::start(extension(env.paths.clone()));
+    host.initialize().await;
+    let response = host
+        .event(
+            1,
+            "tool_call",
+            bash_event(),
+            hooks_ctx(&env.cwd, false, false),
+        )
+        .await;
+    host.finish().await.unwrap();
+    assert_ne!(response["result"]["result"]["block"], true, "{response}");
+    assert!(ran(&env, "file"));
+    assert!(!ran(&env, "server"));
+}
+
+#[tokio::test]
 async fn allow_managed_hooks_only_drops_user_hooks() {
     let env = env();
     let deny = script(&env, "user", DENY);

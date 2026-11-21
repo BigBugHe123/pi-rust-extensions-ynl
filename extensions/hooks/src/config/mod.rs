@@ -2,6 +2,7 @@ pub mod claude_policy;
 pub mod codex;
 pub mod managed;
 pub mod options;
+pub mod policy_command;
 pub mod policy_sources;
 
 use std::path::{Path, PathBuf};
@@ -153,7 +154,11 @@ fn load_claude(input: &LoadInput, options: &Options, loaded: &mut Loaded) -> boo
         for policy in &policy {
             if let Some(hooks) = policy.doc.get("hooks") {
                 let defs = parse_hooks(Source::Claude, Scope::Global, &policy.path, hooks);
-                loaded.hooks.extend(with_layer(defs, Layer::Managed));
+                let mut defs = with_layer(defs, Layer::Managed);
+                for def in &mut defs {
+                    def.user_writable = policy.source.user_writable();
+                }
+                loaded.hooks.extend(defs);
             }
         }
     }

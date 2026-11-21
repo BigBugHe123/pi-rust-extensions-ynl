@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime};
 use serde_json::{Map, Value};
 
 use super::managed::claude_policy_files;
+use super::policy_command::{self, CLAUDE_LIMITS};
 
 /// Claude Code plans for its cached server policy to expire this long after the last fetch.
 const REMOTE_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -154,14 +155,14 @@ pub fn remote_cache(claude_dir: &Path) -> (PathBuf, PolicyRead) {
 }
 
 fn plutil(path: &Path) -> PolicyRead {
-    let output = Command::new("/usr/bin/plutil")
+    let mut command = Command::new("/usr/bin/plutil");
+    command
         .args(["-convert", "json", "-o", "-", "--"])
-        .arg(path)
-        .output();
-    match output {
+        .arg(path);
+    match policy_command::run(&mut command, CLAUDE_LIMITS) {
         Ok(out) if out.status.success() => parse_doc(&String::from_utf8_lossy(&out.stdout)),
         Ok(out) => PolicyRead::Broken(String::from_utf8_lossy(&out.stderr).trim().to_owned()),
-        Err(err) => PolicyRead::Broken(err.to_string()),
+        Err(err) => PolicyRead::Broken(format!("plutil: {err}")),
     }
 }
 
@@ -170,12 +171,12 @@ fn reg_query(hive: Hive) -> PolicyRead {
     let root = std::env::var_os("SystemRoot")
         .filter(|root| !root.is_empty())
         .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
-    let output = Command::new(root.join("System32").join("reg.exe"))
-        .args(["query", hive.key(), "/v", "Settings"])
-        .output();
-    match output {
+    let mut command = Command::new(root.join("System32").join("reg.exe"));
+    command.args(["query", hive.key(), "/v", "Settings"]);
+    match policy_command::run(&mut command, CLAUDE_LIMITS) {
         Ok(out) if out.status.success() => parse_reg_query(&String::from_utf8_lossy(&out.stdout)),
-        _ => PolicyRead::Absent,
+        Ok(_) => PolicyRead::Absent,
+        Err(err) => PolicyRead::Broken(format!("reg: {err}")),
     }
 }
 

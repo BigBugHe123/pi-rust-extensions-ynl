@@ -367,6 +367,31 @@ fn managed_hooks_show_details_without_actions() {
 }
 
 #[test]
+fn user_writable_managed_hooks_offer_only_trust_actions() {
+    let mut rows = rows();
+    rows[0].def.layer = Layer::Managed;
+    rows[0].def.user_writable = true;
+    let hash = rows[0].def.hash.clone();
+    let mut view = View::new(true);
+    assert_eq!(press(&mut view, &rows, &[DOWN, RIGHT]), Action::Redraw);
+    assert!(view.status.clone().unwrap().1.contains("managed hook"));
+    press(&mut view, &rows, &["\r"]);
+    let text = plain(&view.render(&rows, 80, None)).join("\n");
+    assert!(
+        text.contains("Trust always") && text.contains("Deny"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Disable") && !text.contains("Remove"),
+        "{text}"
+    );
+    assert_eq!(
+        press(&mut view, &rows, &[UP, "\r"]),
+        Action::Trust(hash, TrustChange::Deny)
+    );
+}
+
+#[test]
 fn clamp_leaves_screens_of_removed_rows() {
     let mut rows = rows();
     let mut view = View::new(true);

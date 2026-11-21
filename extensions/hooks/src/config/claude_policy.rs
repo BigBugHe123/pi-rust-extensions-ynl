@@ -26,6 +26,13 @@ pub enum PolicySource {
     Hkcu,
 }
 
+impl PolicySource {
+    /// The server-managed copy and HKCU, which the user can write. Their hooks need trust.
+    pub fn user_writable(self) -> bool {
+        matches!(self, Self::Remote | Self::Hkcu)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PolicyDoc {
     pub source: PolicySource,

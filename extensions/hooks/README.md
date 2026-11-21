@@ -43,7 +43,7 @@ Writes per scope:
 - Add appends `{ matcher?, hooks: [{ type: "command", command }] }` to the pi file of the chosen scope and marks the new hook trusted.
 - Settings write their key to the global options file.
 - Project scope needs a trusted project (`isProjectTrusted`). In an untrusted project the panel shows a warning, hides project hooks, and offers only the global scope for a new hook.
-- Managed hooks (organization policy files) cannot be disabled, removed, or untrusted from the panel.
+- Managed hooks cannot be disabled or removed from the panel. Hooks from the server-managed copy and HKCU have the trust actions (Trust always, Allow once, Untrust, Deny); the other managed hooks have no actions.
 
 Each change reloads the config, so the running session uses it at once.
 
@@ -60,10 +60,10 @@ The extension registers no tools.
 - `<root>` is the session cwd when it holds `.claude` (or `.codex`), else the nearest parent directory with `.git`, else the cwd. `CLAUDE_PROJECT_DIR` is the Claude `<root>`.
 - In a git worktree without one of the project files, the main checkout's copy applies. This covers the untracked `.claude/settings.local.json`.
 - Hooks from all files merge; the `conflicts` option decides what runs when several layers define the same event and matcher (see [Conflicts between layers](#conflicts-between-layers)).
-- Managed hooks load in every `scope` option and project trust state while their source (`sources.claude` or `sources.codex`) is on. They are trusted by policy, ignore `disabled` lists and Codex `[hooks.state]`, and are not shadowed.
+- Managed hooks load in every `scope` option and project trust state while their source (`sources.claude` or `sources.codex`) is on. They ignore `disabled` lists and Codex `[hooks.state]` and are not shadowed. They are trusted by policy, except hooks from the server-managed copy and HKCU.
 - Claude managed sources are selected as Claude Code does. A source counts when it sets a key other than `managedSourcesBehavior`, `wslInheritsWindowsSettings`, and `$` metadata keys to a non-null value. By default (`first-wins`), only the highest-ranked source that counts applies; none of the hook keys (`hooks`, `disableAllHooks`, `allowManagedHooksOnly`, `allowedHttpHookUrls`, `httpHookAllowedEnvVars`) is read from the other sources. `managedSourcesBehavior: "merge"` in the highest source that carries it or a policy key applies every counting source except HKCU. The HKCU value applies only when no server, MDM, or file document is present. A plist, HKLM value, or file that exists but cannot be read or parsed is present; a server-managed copy that cannot be read or parsed is absent. All selected sources load as layer `managed`.
-- The server-managed copy and the HKCU value are user-writable. Claude Code ranks both as managed sources, so their hooks run as managed hooks without a trust prompt. Claude Code reads the copy only in a session that can fetch server-managed settings, can reject an unsigned or expired copy, and replaces an edited copy at the next fetch; pi reads the copy whenever `managed/claudeServer` is on. Claude Code asks the user to approve server-managed hooks when they arrive in an interactive session; pi shows no prompt for the hooks in the copy.
-- The switches `managed/claudeServer`, `managed/claudeMdm`, `managed/claudeRegistry` (HKLM and HKCU), and `managed/claudeFiles` turn each Claude managed source on or off (default on). A source that is off is not read and does not take part in the selection. The plist is converted with `/usr/bin/plutil -convert json -o -`, and the registry is read with `reg query`.
+- The server-managed copy and the HKCU value are user-writable. Their hooks keep the managed rank for source selection, precedence, and conflicts, and they go through the trust prompt like user hooks; without a UI they are skipped. Claude Code also asks the user to approve server-managed hooks in an interactive session. Claude Code reads the copy only in a session that can fetch server-managed settings, can reject an unsigned or expired copy, and replaces an edited copy at the next fetch; pi reads the copy whenever `managed/claudeServer` is on.
+- The switches `managed/claudeServer`, `managed/claudeMdm`, `managed/claudeRegistry` (HKLM and HKCU), and `managed/claudeFiles` turn each Claude managed source on or off (default on). A source that is off is not read and does not take part in the selection. The plist is converted with `/usr/bin/plutil -convert json -o -`, and the registry is read with `reg query`. Each call gets 5 seconds and 2 MiB of output, as in Claude Code; a call that runs longer or prints more is stopped, and its source is skipped with a warning.
 - The server-managed copy is skipped when it and `remote-settings.json.signature.json` were both last written more than 24 hours ago, because Claude Code plans for its cache to expire 24 hours after the last fetch. A signed fetch that finds the settings unchanged rewrites only the signature file, so an unsigned copy that stays unchanged for 24 hours is skipped too. The extension does not fetch server-managed settings.
 - The managed sources are read each time the config loads (session start, reload, and a ConfigChange reload). ConfigChange (`policy_settings`) watches only the managed settings files, as Claude Code does, and not while `managed/claudeFiles` is off.
 - The Codex project root is the nearest dir with one of the user `config.toml` `project_root_markers` (default `[".git"]`); `project_root_markers = []` makes the cwd the root.
@@ -102,7 +102,7 @@ Managed hooks are not in this order. A conflict occurs when one family has diffe
 | --- | --- |
 | `merge` (default) | The hooks of all layers run. Claude Code and Codex do the same. |
 | `warn` | The hooks of all layers run. At load, one warning for each session shows the new conflicts. It also shows each command that Claude or pi config and Codex config both register for one event. A tool call shows a warning when its hooks give different decisions or when more than one hook changes the input. |
-| `override` | For each conflict, only the hooks of the most specific layer run. If none of these hooks can run, the next layer runs. A hook cannot run when it is disabled, unsupported, or denied, or when it is untrusted and the user does not allow it at the prompt. Managed hooks always run. |
+| `override` | For each conflict, only the hooks of the most specific layer run. If none of these hooks can run, the next layer runs. A hook cannot run when it is disabled, unsupported, or denied, or when it is untrusted and the user does not allow it at the prompt. Managed hooks run outside this order; those from the server-managed copy and HKCU still need trust. |
 
 In all modes:
 
@@ -114,7 +114,7 @@ In all modes:
 
 Each hook has a hash: sha256 hex of the canonical JSON (sorted keys) `{ file, event, matcher, handler }`, with `file` the absolute config path and `matcher` `null` when omitted. A changed handler or a moved file gives a new hash.
 
-- Managed hooks are trusted by policy.
+- Managed hooks are trusted by policy, except hooks from the server-managed copy and HKCU, which the user can write.
 - With `trustAll` or `--hooks-trust-all`, all hooks run except denied ones.
 - Otherwise the first run of an untrusted hook asks with "Allow once", "Always allow", "Deny". "Always allow" and "Deny" go to `state.json`; "Allow once" lasts for the session. A dismissed prompt skips the hook this time.
 - Without a UI, untrusted hooks are skipped with a log line.
