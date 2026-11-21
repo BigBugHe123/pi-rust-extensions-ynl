@@ -229,6 +229,7 @@ fn supported(def: &HookDef) -> bool {
         "command" if def.str_field("command").is_none() => "command hook without command",
         "command"
             if def.plugin.is_some()
+                && !def.source.is_codex()
                 && def.handler.get("args").is_none()
                 && def
                     .str_field("command")

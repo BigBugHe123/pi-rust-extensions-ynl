@@ -24,6 +24,7 @@ fn fixture() -> Fixture {
             codex_home: base.join("codex"),
             codex_system: None,
             claude_policy: None,
+            codex_mdm: None,
             temp_dir: base.join("tmp"),
             agent_dir: None,
         },

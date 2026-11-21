@@ -79,6 +79,9 @@ pub fn set_disabled(file: &Path, def: &HookDef, disabled: bool, trusted: bool) -
 /// Deletes the handler of `def` from its config file and drops emptied groups and events.
 pub fn remove(def: &HookDef, trusted: bool) -> Result<()> {
     check_scope(def.scope, trusted)?;
+    if def.source.is_codex() && def.plugin.is_some() {
+        bail!("Codex plugin hooks live in the installed plugin; disable the hook instead");
+    }
     if def.file.extension().is_some_and(|e| e == "toml") {
         return remove_toml(def);
     }
