@@ -1,5 +1,5 @@
-//! Codex managed sources besides the system dir layer: `requirements.toml`, the cloud bundle
-//! cache, the legacy `managed_config.toml`, and macOS managed preferences (MDM).
+//! Codex managed sources besides the system dir layer: `requirements.toml`, the legacy
+//! `managed_config.toml`, and macOS managed preferences (MDM).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,7 +9,6 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::Value;
 
 use super::codex::{CodexLayer, parse_toml};
-use super::codex_cloud;
 use super::managed::{Requirements, codex_requirements};
 use super::options::{self, Options};
 use crate::paths::Paths;
@@ -21,10 +20,8 @@ const MDM_REQUIREMENTS_KEY: &str = "requirements_toml_base64";
 /// Managed Codex sources in Codex precedence order, lowest first.
 #[derive(Debug, Default)]
 pub struct ManagedSources {
-    /// System `requirements.toml`, cloud fragments, then MDM.
+    /// System `requirements.toml`, then MDM.
     pub requirements: Vec<Requirements>,
-    /// Cloud config fragments: above the system layer, below the user layer.
-    pub cloud_configs: Vec<CodexLayer>,
     /// Legacy `managed_config.toml`, then MDM config: above every other layer.
     pub top_configs: Vec<CodexLayer>,
 }
@@ -43,11 +40,6 @@ impl ManagedSources {
             {
                 sources.top_configs.push(layer);
             }
-        }
-        if on(options::CODEX_CLOUD) {
-            let cloud = codex_cloud::load(&paths.codex_home);
-            sources.requirements.extend(cloud.requirements);
-            sources.cloud_configs = cloud.configs;
         }
         if on(options::CODEX_MDM)
             && let Some(dir) = paths.codex_mdm.as_deref()

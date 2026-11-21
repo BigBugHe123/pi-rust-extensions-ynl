@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::codex_cloud;
 use serde_json::json;
 
 const HOOKS: &str = "[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype = \"command\"\ncommand = \"mdm\"\n";
@@ -107,7 +108,7 @@ fn load_follows_codex_precedence_and_switches() {
     write_cache(
         &paths.codex_home,
         &stop_hook("cloud"),
-        "allow_managed_hooks_only = false\n",
+        "allow_managed_hooks_only = false\n[features]\nhooks = false\n",
     );
     let (agent, cwd) = (base.join("agent"), base.join("repo"));
     write(
@@ -130,28 +131,36 @@ fn load_follows_codex_precedence_and_switches() {
             project_trusted: true,
         };
         let loaded = crate::config::load(&input);
-        loaded.hooks.iter().map(|h| h.summary()).collect::<Vec<_>>()
+        let hooks = loaded.hooks.iter();
+        hooks
+            .map(|h| format!("{}:{}", h.summary(), h.layer.name()))
+            .collect::<Vec<_>>()
     };
     assert_eq!(
         run(&[]),
-        ["req", "sys", "cloud", "user"],
-        "cloud false beats system true"
+        ["req:managed", "sys:managed"],
+        "a signed cloud cache cannot lift allow_managed_hooks_only"
     );
-    assert_eq!(run(&[options::CODEX_CLOUD]), ["req", "sys"]);
-    assert_eq!(run(&[options::CODEX_SYSTEM]), ["req", "cloud", "user"]);
     assert_eq!(
         run(&[options::CODEX_REQUIREMENTS]),
-        ["sys", "cloud", "user"]
+        ["sys:managed", "cloud:global", "user:global"],
+        "cloud hooks need trust and the cache cannot pin [features] hooks"
     );
+    assert_eq!(
+        run(&[options::CODEX_REQUIREMENTS, options::CODEX_CLOUD]),
+        ["sys:managed", "user:global"]
+    );
+    assert_eq!(run(&[options::CODEX_SYSTEM]), ["req:managed"]);
     if cfg!(unix) {
         write(
             &system.join("managed_config.toml"),
             "[features]\nhooks = false\n",
         );
         assert!(
-            run(&[]).is_empty(),
+            run(&[options::CODEX_REQUIREMENTS]).is_empty(),
             "managed_config.toml beats the project layer"
         );
-        assert_eq!(run(&[options::CODEX_LEGACY]).len(), 4);
+        let off = [options::CODEX_REQUIREMENTS, options::CODEX_LEGACY];
+        assert_eq!(run(&off).len(), 3);
     }
 }

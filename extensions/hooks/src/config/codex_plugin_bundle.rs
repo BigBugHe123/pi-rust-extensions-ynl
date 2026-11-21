@@ -1,9 +1,12 @@
 //! Installed Codex plugin bundles: the active version dir and the content fingerprint.
 
 use std::cmp::Ordering;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
+
+use crate::model::{HookDef, trust_hash};
 
 const LOCAL_VERSION: &str = "local";
 
@@ -70,6 +73,36 @@ fn compare_pre(a: &str, b: &str) -> Ordering {
         }
     }
     a.split('.').count().cmp(&b.split('.').count())
+}
+
+/// The trust hash of a Codex plugin hook, which covers the fingerprint of its plugin files.
+pub fn bundle_trust_hash(def: &HookDef, fingerprint: &str) -> String {
+    let file = format!("{}#{fingerprint}", def.file.display());
+    trust_hash(&file, &def.event, def.matcher.as_deref(), &def.handler)
+}
+
+/// False for a Codex plugin hook whose plugin files changed after the config loaded, as Codex
+/// checks before each run. `fingerprints` caches each plugin root for one dispatch.
+pub fn bundle_unchanged(
+    def: &HookDef,
+    fingerprints: &mut HashMap<PathBuf, Option<String>>,
+) -> bool {
+    let root = def.plugin.as_ref().and_then(|p| p.root.as_deref());
+    let Some(root) = root.filter(|_| def.source.is_codex()) else {
+        return true;
+    };
+    let current = fingerprints
+        .entry(PathBuf::from(root))
+        .or_insert_with(|| fingerprint(Path::new(root)).ok());
+    let unchanged = current
+        .as_deref()
+        .is_some_and(|current| bundle_trust_hash(def, current) == def.hash);
+    if !unchanged {
+        pi_ext_sdk::info!(
+            "hooks: skipping {def}: its plugin files changed; open /hooks to review it"
+        );
+    }
+    unchanged
 }
 
 /// The bundle hash of codex-rs/hooks/src/engine/plugin_fingerprint.rs.

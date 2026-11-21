@@ -251,3 +251,17 @@ fn unreadable_files_are_not_overwritten() {
     assert!(add(&pi, Scope::Global, true, "Stop", None, "x").is_err());
     assert_eq!(read(&pi), "{ not json");
 }
+
+#[test]
+fn hooks_without_a_config_file_are_not_removed() {
+    let f = fixture();
+    write(&f.paths.claude_dir.join("settings.json"), CLAUDE);
+    let loaded = load_with(&f);
+    let mut cloud = find(&loaded, "c").clone();
+    cloud.file = f
+        .paths
+        .codex_home
+        .join("cloud-config-bundle-cache.json#config_toml/f");
+    let err = remove(&cloud, true).unwrap_err().to_string();
+    assert!(err.contains("is not a file pi can edit"), "{err}");
+}

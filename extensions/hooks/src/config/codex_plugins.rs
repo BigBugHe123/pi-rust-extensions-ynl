@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::codex::feature;
-use super::codex_plugin_bundle::{active_version, fingerprint};
+use super::codex_plugin_bundle::{active_version, bundle_trust_hash, fingerprint};
 use super::options::read_json;
 use super::parse_hooks;
-use crate::model::{HookDef, Layer, Plugin, Scope, Source, trust_hash};
+use crate::model::{HookDef, Layer, Plugin, Scope, Source};
 
 const LEGACY_MANIFESTS: [&str; 3] = [
     ".codex-plugin/plugin.json",
@@ -76,13 +76,7 @@ pub fn load(
             env: Vec::new(),
         };
         for mut def in plugin_defs {
-            let trust_file = format!("{}#{fingerprint}", def.file.display());
-            def.hash = trust_hash(
-                &trust_file,
-                &def.event,
-                def.matcher.as_deref(),
-                &def.handler,
-            );
+            def.hash = bundle_trust_hash(&def, &fingerprint);
             def.layer = Layer::Global;
             def.plugin = Some(plugin.clone());
             defs.push(def);

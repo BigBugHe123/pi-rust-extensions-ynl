@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use super::*;
+use crate::config::codex_plugin_bundle::bundle_unchanged;
 use crate::config::options::{self, Options};
 use crate::config::{LoadInput, load as load_config};
 use crate::paths::Paths;
@@ -164,4 +165,49 @@ fn switches_and_managed_only_gate_plugin_hooks() {
         "requirements.toml off"
     );
     assert!(Options::default().switch_on(options::CODEX_PLUGINS));
+}
+
+#[test]
+fn project_layers_cannot_enable_plugins() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path();
+    let paths = Paths {
+        claude_dir: base.join("claude"),
+        codex_home: base.join("codex"),
+        codex_system: None,
+        claude_policy: None,
+        codex_mdm: None,
+        temp_dir: base.join("tmp"),
+        agent_dir: None,
+    };
+    let root = install(&paths.codex_home, "p@m", "1.0.0");
+    write(&root.join(".codex-plugin/plugin.json"), r#"{"name":"p"}"#);
+    write(&root.join("hooks/hooks.json"), &hooks("plug").to_string());
+    let user = "[plugins.\"p@m\"]\nenabled = false\n";
+    write(&paths.codex_home.join("config.toml"), user);
+    let cwd = base.join("repo");
+    let project = "[features]\nplugins = true\n[plugins.\"p@m\"]\nenabled = true\n";
+    write(&cwd.join(".codex/config.toml"), project);
+    let agent = base.join("agent");
+    let input = LoadInput {
+        paths: &paths,
+        agent_dir: &agent,
+        cwd: &cwd,
+        project_trusted: true,
+    };
+    assert!(commands(&load_config(&input).hooks).is_empty());
+}
+
+#[test]
+fn changed_plugin_files_stop_loaded_hooks() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let root = install(home, "p@m", "1.0.0");
+    write(&root.join(".codex-plugin/plugin.json"), r#"{"name":"p"}"#);
+    write(&root.join("hooks/hooks.json"), &hooks("x").to_string());
+    let user = json!({ "plugins": { "p@m": {} } });
+    let defs = load(home, &[&user], None, &HashMap::new());
+    assert!(bundle_unchanged(&defs[0], &mut HashMap::new()));
+    write(&root.join("hooks/run.sh"), "echo changed");
+    assert!(!bundle_unchanged(&defs[0], &mut HashMap::new()));
 }

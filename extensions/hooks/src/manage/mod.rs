@@ -82,6 +82,12 @@ pub fn remove(def: &HookDef, trusted: bool) -> Result<()> {
     if def.source.is_codex() && def.plugin.is_some() {
         bail!("Codex plugin hooks live in the installed plugin; disable the hook instead");
     }
+    if !def.file.is_file() {
+        bail!(
+            "{} is not a file pi can edit; disable the hook instead",
+            def.file.display()
+        );
+    }
     if def.file.extension().is_some_and(|e| e == "toml") {
         return remove_toml(def);
     }
