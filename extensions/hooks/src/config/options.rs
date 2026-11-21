@@ -4,6 +4,7 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 use crate::model::{Scope, Source};
+use crate::policy::ConflictMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeOption {
@@ -46,6 +47,8 @@ pub struct Options {
     pub pi: bool,
     pub scope: ScopeOption,
     pub trust_all: bool,
+    /// Read from the global options file only.
+    pub conflicts: ConflictMode,
     /// Hashes from the `disabled` lists of both files.
     pub disabled: BTreeSet<String>,
 }
@@ -58,6 +61,7 @@ impl Default for Options {
             pi: true,
             scope: ScopeOption::Both,
             trust_all: false,
+            conflicts: ConflictMode::Merge,
             disabled: BTreeSet::new(),
         }
     }
@@ -79,6 +83,9 @@ impl Options {
             }
             if let Some(trust_all) = layer.get("trustAll").and_then(Value::as_bool) {
                 options.trust_all = trust_all;
+            }
+            if let Some(mode) = layer.get("conflicts").and_then(Value::as_str) {
+                options.conflicts = ConflictMode::parse(mode).unwrap_or(options.conflicts);
             }
             if let Some(list) = layer.get("disabled").and_then(Value::as_array) {
                 let hashes = list.iter().filter_map(Value::as_str).map(str::to_owned);
