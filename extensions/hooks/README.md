@@ -44,7 +44,7 @@ Writes per scope:
 - Settings write their key to the global options file.
 - Project scope needs a trusted project (`isProjectTrusted`). In an untrusted project the panel shows a warning, hides project hooks, and offers only the global scope for a new hook.
 - Managed hooks (organization policy files) cannot be disabled, removed, or untrusted from the panel.
-- Codex plugin hooks cannot be removed, because they are in the installed plugin. Disable them instead.
+- Codex plugin and cloud hooks cannot be removed, because they are in the installed plugin or in the cache that Codex writes. Disable them instead.
 
 Each change reloads the config, so the running session uses it at once.
 
