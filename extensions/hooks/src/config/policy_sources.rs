@@ -126,7 +126,7 @@ pub fn files(dir: &Path) -> Vec<(PathBuf, PolicyRead)> {
 /// Code reads a copy that cannot be read or parsed as absent.
 pub fn remote_cache(claude_dir: &Path) -> (PathBuf, PolicyRead) {
     let path = claude_dir.join("remote-settings.json");
-    // A fetch that finds the settings unchanged rewrites only the signature file.
+    // A signed fetch that finds the settings unchanged rewrites only the signature file.
     let signature = claude_dir.join("remote-settings.json.signature.json");
     let age = [&path, &signature]
         .into_iter()
