@@ -2,6 +2,7 @@ pub mod codex;
 pub mod managed;
 pub mod options;
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use pi_ext_sdk::paths::project_path;
@@ -68,7 +69,11 @@ pub fn load(input: &LoadInput) -> Loaded {
     loaded.options = Options::merge(&layers);
     loaded.options.switches = options::read_switches(&global_doc, options::SWITCHES);
     let options = loaded.options.clone();
-    let claude_disabled = options.claude && load_claude(input, &options, &mut loaded);
+    let allowed_plugins = if options.claude {
+        load_claude(input, &options, &mut loaded)
+    } else {
+        None
+    };
     if options.codex {
         load_codex(input, &options, &mut loaded);
     }
@@ -82,10 +87,14 @@ pub fn load(input: &LoadInput) -> Loaded {
             if let Some(hooks) = doc.and_then(|d| d.get("hooks")) {
                 let defs = parse_hooks(Source::Pi, scope, path, hooks);
                 // Plugin hooks come from Claude Code plugins, so Claude `disableAllHooks` covers them.
-                loaded.hooks.extend(
-                    defs.into_iter()
-                        .filter(|def| !(claude_disabled && def.plugin.is_some())),
-                );
+                loaded.hooks.extend(defs.into_iter().filter(|def| {
+                    match (&allowed_plugins, &def.plugin) {
+                        (Some(ids), Some(plugin)) => {
+                            plugin.id.as_ref().is_some_and(|id| ids.contains(id))
+                        }
+                        _ => true,
+                    }
+                }));
             }
         }
     }
@@ -106,9 +115,13 @@ fn with_layer(mut defs: Vec<HookDef>, layer: Layer) -> Vec<HookDef> {
     defs
 }
 
-/// Claude user, project, local, and managed settings. Returns `true` when the settings turn off
-/// the non-managed Claude hooks.
-fn load_claude(input: &LoadInput, options: &Options, loaded: &mut Loaded) -> bool {
+/// Claude user, project, local, and managed settings. Returns the plugin ids whose pi-native
+/// groups can run, or `None` when the settings leave plugin hooks on.
+fn load_claude(
+    input: &LoadInput,
+    options: &Options,
+    loaded: &mut Loaded,
+) -> Option<BTreeSet<String>> {
     let scoped = |scope: Scope| options.scope.allows(scope);
     let root = project_root(input.cwd, ".claude");
     let mut files = vec![(Layer::Global, input.paths.claude_dir.join("settings.json"))];
@@ -150,7 +163,9 @@ fn load_claude(input: &LoadInput, options: &Options, loaded: &mut Loaded) -> boo
     if all_off {
         pi_ext_sdk::info!("hooks: managed disableAllHooks is set; Claude hooks are off");
     } else if others_off {
-        pi_ext_sdk::info!("hooks: Claude settings allow only managed Claude hooks");
+        pi_ext_sdk::info!(
+            "hooks: Claude settings allow only managed and force-enabled plugin Claude hooks"
+        );
     }
     if !all_off {
         for (path, doc) in &policy {
@@ -172,8 +187,12 @@ fn load_claude(input: &LoadInput, options: &Options, loaded: &mut Loaded) -> boo
                 loaded.hooks.extend(with_layer(defs, *layer));
             }
         }
+        return None;
     }
-    others_off
+    if all_off || !options.switch_on("managed/forceEnabledPlugins") {
+        return Some(BTreeSet::new());
+    }
+    Some(managed::force_enabled_plugins(policy_docs()))
 }
 
 /// Codex system (managed), `requirements.toml` (managed), user, and project layers.

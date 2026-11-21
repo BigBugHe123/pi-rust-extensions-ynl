@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
 
@@ -244,6 +244,47 @@ fn disable_all_hooks_follows_settings_precedence() {
         commands(&load_with(&f, true)),
         ["claude/global:cg", "pi/global plugin p@m:plug"]
     );
+}
+
+#[test]
+fn force_enabled_plugin_hooks_pass_claude_gates() {
+    let f = fixture();
+    let policy = f.cwd.parent().unwrap().join("claude-policy");
+    let paths = Paths {
+        claude_policy: Some(policy.clone()),
+        ..f.paths.clone()
+    };
+    let f = Fixture { paths, ..f };
+    let group = |id: &str| json!({ "plugin": id, "hooks": [{ "command": id }] });
+    let plugins = ["fmt@acme", "fmt@other", "lint@acme"].map(group);
+    let pi = json!({ "hooks": { "Stop": plugins } });
+    write(&f.agent.join("ext/hooks.json"), &pi.to_string());
+    let managed = |extra: Value| {
+        let mut doc = json!({ "enabledPlugins": { "fmt@acme": true, "lint@acme": true } });
+        doc.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        write(&policy.join("managed-settings.json"), &doc.to_string());
+    };
+    write(
+        &policy.join("managed-settings.d/10-off.json"),
+        r#"{"enabledPlugins":{"lint@acme":false}}"#,
+    );
+    let forced = ["pi/global plugin fmt@acme:fmt@acme"];
+    managed(json!({ "allowManagedHooksOnly": true }));
+    assert_eq!(commands(&load_with(&f, true)), forced);
+    managed(json!({}));
+    write(
+        &f.paths.claude_dir.join("settings.json"),
+        r#"{"disableAllHooks":true}"#,
+    );
+    assert_eq!(commands(&load_with(&f, true)), forced);
+    managed(json!({ "disableAllHooks": true }));
+    assert!(commands(&load_with(&f, true)).is_empty());
+    managed(json!({ "allowManagedHooksOnly": true }));
+    let switched_off = json!({ "managed": { "forceEnabledPlugins": false }, "hooks": pi["hooks"] });
+    write(&f.agent.join("ext/hooks.json"), &switched_off.to_string());
+    assert!(commands(&load_with(&f, true)).is_empty());
 }
 
 #[test]
