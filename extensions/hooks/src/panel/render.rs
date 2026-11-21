@@ -127,7 +127,7 @@ impl View {
             .iter()
             .map(|tab| {
                 let count = match tab {
-                    Tab::Settings => Setting::ALL.len(),
+                    Tab::Settings => Setting::all().len(),
                     _ => rows.iter().filter(|r| tab.shows(r)).count(),
                 };
                 let label = format!("{} ({count})", tab.title());

@@ -66,6 +66,7 @@ pub fn load(input: &LoadInput) -> Loaded {
         .flatten()
         .collect();
     loaded.options = Options::merge(&layers);
+    loaded.options.switches = options::read_switches(&global_doc, options::SWITCHES);
     let options = loaded.options.clone();
     let claude_disabled = options.claude && load_claude(input, &options, &mut loaded);
     if options.codex {

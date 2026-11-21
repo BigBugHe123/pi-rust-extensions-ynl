@@ -2,6 +2,7 @@
 
 use serde_json::{Value, json};
 
+use crate::config::options::{SWITCHES, Switch};
 use crate::config::{Options, ScopeOption};
 use crate::model::Source;
 use crate::policy::ConflictMode;
@@ -12,19 +13,27 @@ pub enum Setting {
     LoadScope,
     TrustAll,
     Conflicts,
+    /// A feature switch from [`SWITCHES`].
+    Switch(&'static Switch),
 }
 
 const SCOPES: [ScopeOption; 3] = [ScopeOption::Global, ScopeOption::Project, ScopeOption::Both];
 
 impl Setting {
-    pub const ALL: [Setting; 6] = [
-        Self::Source(Source::Claude),
-        Self::Source(Source::Codex),
-        Self::Source(Source::Pi),
-        Self::LoadScope,
-        Self::TrustAll,
-        Self::Conflicts,
-    ];
+    /// The Settings tab rows: the base options, then the feature switches.
+    pub fn all() -> Vec<Setting> {
+        let base = [
+            Self::Source(Source::Claude),
+            Self::Source(Source::Codex),
+            Self::Source(Source::Pi),
+            Self::LoadScope,
+            Self::TrustAll,
+            Self::Conflicts,
+        ];
+        base.into_iter()
+            .chain(SWITCHES.iter().map(Self::Switch))
+            .collect()
+    }
 
     pub fn label(self) -> &'static str {
         match self {
@@ -34,6 +43,7 @@ impl Setting {
             Self::LoadScope => "Load hooks from",
             Self::TrustAll => "Trust all hooks",
             Self::Conflicts => "Conflicts between layers",
+            Self::Switch(switch) => switch.label,
         }
     }
 
@@ -49,6 +59,7 @@ impl Setting {
             Self::LoadScope => "The files that load; managed files load in each scope",
             Self::TrustAll => "Run hooks without a trust prompt; denied hooks stay denied",
             Self::Conflicts => "What runs when layers match the same event and matcher",
+            Self::Switch(switch) => switch.about,
         }
     }
 
@@ -59,6 +70,7 @@ impl Setting {
             Self::LoadScope => "scope".into(),
             Self::TrustAll => "trustAll".into(),
             Self::Conflicts => "conflicts".into(),
+            Self::Switch(switch) => switch.key.into(),
         }
     }
 
@@ -82,13 +94,14 @@ impl Setting {
                 .iter()
                 .map(|mode| (mode.name(), mode.describe()))
                 .collect(),
+            Self::Switch(_) => vec![("on", "on"), ("off", "off")],
         }
     }
 
     /// The JSON value that `values()[index]` writes.
     pub fn json(self, index: usize) -> Value {
         match self {
-            Self::Source(_) | Self::TrustAll => json!(index == 0),
+            Self::Source(_) | Self::TrustAll | Self::Switch(_) => json!(index == 0),
             Self::LoadScope => json!(SCOPES[index.min(SCOPES.len() - 1)].name()),
             Self::Conflicts => json!(ConflictMode::ALL[index.min(2)].name()),
         }
@@ -100,6 +113,7 @@ impl Setting {
         match self {
             Self::Source(source) => on(options.source_on(source)),
             Self::TrustAll => on(options.trust_all),
+            Self::Switch(switch) => on(options.switch_on(switch.key)),
             Self::LoadScope => SCOPES.iter().position(|s| *s == options.scope).unwrap_or(2),
             Self::Conflicts => ConflictMode::ALL
                 .iter()

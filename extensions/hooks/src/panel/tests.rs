@@ -260,7 +260,7 @@ fn tabs_filter_by_scope_and_typing_searches() {
     assert_eq!(view.entries(&rows).len(), 3);
     press(&mut view, &rows, &["\t"]);
     assert_eq!(view.tab, Tab::Settings);
-    assert_eq!(view.entries(&rows).len(), Setting::ALL.len());
+    assert_eq!(view.entries(&rows).len(), Setting::all().len());
     press(&mut view, &rows, &["\x1b[Z", "\x1b[Z", "\x1b[Z"]);
     assert_eq!(view.tab, Tab::All);
     press(&mut view, &rows, &["q", "\x7f", "c", "o", "d", "e", "x"]);

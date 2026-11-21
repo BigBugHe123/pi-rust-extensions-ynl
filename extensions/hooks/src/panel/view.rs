@@ -152,7 +152,7 @@ impl View {
     pub fn entries<'a>(&self, rows: &'a [Row]) -> Vec<Entry<'a>> {
         let query = self.query.to_lowercase();
         if self.tab == Tab::Settings {
-            return Setting::ALL
+            return Setting::all()
                 .into_iter()
                 .filter(|s| s.matches(&query, &self.options))
                 .map(Entry::Setting)

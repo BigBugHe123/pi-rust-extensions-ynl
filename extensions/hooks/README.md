@@ -81,6 +81,7 @@ In `<agentDir>/ext/hooks.json` and `<cwd>/.pi/ext/hooks.json` (same file as the 
 | `trustAll` | `false` | Run all hooks without trust prompts. Read from the global options file only; a project file's `trustAll` is ignored. |
 | `conflicts` | `"merge"` | `merge`, `warn`, or `override`; see [Conflicts between layers](#conflicts-between-layers). Read from the global options file only, because a project options file can come from the repository. |
 | `disabled` | `[]` | Hashes of disabled hooks. The lists of both files merge. |
+| Feature switches | per switch | On and off rows that features add to the Settings tab, each under its own key (for example `managed/<name>`). Read from the global options file only. |
 
 ## Conflicts between layers
 
@@ -227,6 +228,6 @@ Events marked pi-rust come from host events that only pi-rust 0.12.3 and later s
 - Output fields: UserPromptSubmit `sessionTitle` sets the session name. A PermissionRequest deny with `decision.interrupt: true` aborts the run. `<system-reminder>` tags in context reach the model with `<` as `&lt;`. PostToolUse `classifierContext` and UserPromptSubmit `suppressOriginalPrompt` have no effect, because pi has no auto mode classifier and shows no block message with the prompt text.
 - Unsupported handler and settings fields: `shell: "powershell"` on non-Windows, Claude `updatedPermissions`, `updatedMCPToolOutput` beyond replacing the content, SessionStart `reloadSkills`, plugin `hooks/hooks.json` files outside the pi-native file, and skill or subagent frontmatter hooks.
 - Claude managed settings come from the managed settings files only: MDM, registry, and server-managed sources are not read, and the files merge without the `first-wins` choice between sources. Under `allowManagedHooksOnly`, hooks of plugins that managed `enabledPlugins` force-enables do not run.
-- The per-session limit of Claude Code prompt and agent hooks (the docs say 12; the 2.1.312 changelog says 24) is not applied.
+- Claude Code runs at most 12 prompt and agent hooks of one event at once and starts the rest as those finish. pi starts them all at once.
 - SubagentStart context and SubagentStop blocks go to `pi.events` channels, because the extension cannot reach the subagent session.
 - A denied hook stays denied with `trustAll`.
