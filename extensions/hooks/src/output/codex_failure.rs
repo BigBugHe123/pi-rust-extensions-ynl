@@ -90,7 +90,7 @@ mod tests {
             "PermissionRequest",
             RawRun::exit(
                 0,
-                r#"{"hookSpecificOutput":{"decision":{"behavior":"allow","interrupt":true}}}"#,
+                r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","interrupt":true}}}"#,
                 ""
             )
         ));
@@ -106,7 +106,15 @@ mod tests {
         assert!(!blocks("PreToolUse", RawRun::exit(0, "", "")));
         assert!(!blocks("PreToolUse", RawRun::exit(0, "{}", "")));
         assert!(!blocks("PreToolUse", RawRun::exit(0, "hook finished", "")));
-        let allowed = r#"{"hookSpecificOutput":{"decision":{"behavior":"allow"}}}"#;
+        assert!(blocks(
+            "PermissionRequest",
+            RawRun::exit(
+                0,
+                r#"{"hookSpecificOutput":{"decision":{"behavior":"allow"}}}"#,
+                ""
+            )
+        ));
+        let allowed = r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#;
         assert_eq!(
             codex("PermissionRequest", RawRun::exit(0, allowed, "")).decision(),
             Some((Permission::Allow, None))
