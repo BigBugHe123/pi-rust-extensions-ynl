@@ -224,10 +224,9 @@ fn url_allowed(http: &HttpPolicy, def: &HookDef) -> bool {
 
 /// Codex does not load an `onFailure: "block"` handler that cannot block.
 fn codex_block_unenforceable(def: &HookDef) -> bool {
-    let async_command = def.kind() == "command" && def.bool_field("async");
     let skip = def.source.is_codex()
         && def.str_field("onFailure") == Some("block")
-        && codex_failure_unenforceable(&def.event, async_command);
+        && codex_failure_unenforceable(&def.event, def.is_async());
     if skip {
         pi_ext_sdk::warn!(
             "hooks: skipping {def}: onFailure:block requires a synchronous hook that supports blocking"
