@@ -247,7 +247,7 @@ async fn pre_compact_stdout_becomes_compaction_instructions() {
     });
 
     let mut host = TestHost::start(extension(env.paths.clone()));
-    host.initialize_as("0.12.22").await;
+    host.initialize_with(&["compactionInstructions"]).await;
     let reply = host
         .event(1, "session_before_compact", manual.clone(), ctx.clone())
         .await;
@@ -263,7 +263,7 @@ async fn pre_compact_stdout_becomes_compaction_instructions() {
     host.finish().await.unwrap();
 
     let mut old = TestHost::start(extension(env.paths.clone()));
-    old.initialize_as("0.12.21").await;
+    old.initialize().await;
     let reply = old.event(1, "session_before_compact", manual, ctx).await;
     assert_eq!(reply["result"], json!({}));
     old.finish().await.unwrap();

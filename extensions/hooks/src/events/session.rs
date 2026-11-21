@@ -174,8 +174,8 @@ pub async fn session_before_compact(rt: Arc<Runtime>, ev: EventCtx) -> Result<Ev
 }
 
 const COMPACT_INSTRUCTIONS_CAP: usize = 10_000;
-/// The first pi that reads `customInstructions` from a `session_before_compact` result.
-const COMPACT_INSTRUCTIONS_PI: (u64, u64, u64) = (0, 12, 22);
+/// The host feature for `customInstructions` in a `session_before_compact` result.
+const COMPACT_INSTRUCTIONS_FEATURE: &str = "compactionInstructions";
 
 /// The `/compact` text, then the stdout of each PreCompact hook, cut at 10,000 characters.
 fn compact_instructions(ev: &EventCtx, outcomes: &[Outcome]) -> Option<String> {
@@ -187,14 +187,13 @@ fn compact_instructions(ev: &EventCtx, outcomes: &[Outcome]) -> Option<String> {
     if hooks.is_empty() {
         return None;
     }
-    let version = ev
+    let supported = ev
         .host()
         .init()
-        .and_then(|init| parse_version(&init.pi_version));
-    if version.is_some_and(|version| version < COMPACT_INSTRUCTIONS_PI) {
-        let (major, minor, patch) = COMPACT_INSTRUCTIONS_PI;
+        .is_some_and(|init| init.has_feature(COMPACT_INSTRUCTIONS_FEATURE));
+    if !supported {
         pi_ext_sdk::info!(
-            "hooks: PreCompact stdout needs pi {major}.{minor}.{patch} or later; not sent"
+            "hooks: PreCompact stdout needs the pi feature {COMPACT_INSTRUCTIONS_FEATURE}; not sent"
         );
         return None;
     }
@@ -220,16 +219,6 @@ fn cap_instructions(text: &str) -> String {
         ),
         None => text.to_owned(),
     }
-}
-
-fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
-    let core = text.trim_start_matches('v').split(['-', '+']).next()?;
-    let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
-    Some((
-        parts.next()??,
-        parts.next()??,
-        parts.next().flatten().unwrap_or(0),
-    ))
 }
 
 pub async fn session_compact(rt: Arc<Runtime>, ev: EventCtx) -> Result<EventReply> {
