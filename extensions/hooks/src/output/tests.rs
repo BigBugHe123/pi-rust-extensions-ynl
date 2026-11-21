@@ -63,10 +63,11 @@ fn exit_codes() {
         )
     );
     let codex_fail = Interpret { source: X, ..cx };
-    assert!(
+    assert_eq!(
         interpret(&codex_fail, &RawRun::exit(1, "", "x"))
             .block
-            .is_none()
+            .as_deref(),
+        Some("PreToolUse hook failed. This hook is configured to block continuation on failure.")
     );
     let timeout = interpret(&cx, &RawRun::failed("timed out after 1s"));
     assert!(timeout.block.unwrap().contains(": timed out; blocking"));
