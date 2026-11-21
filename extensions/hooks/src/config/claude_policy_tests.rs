@@ -89,7 +89,7 @@ fn first_wins_takes_the_highest_source_with_a_policy_key() {
     fx.files(json!({ "hooks": hooks("file"), "allowManagedHooksOnly": true }));
     let docs = claude_policy_docs(&fx.paths, &Options::default());
     assert_eq!(sources_of(&docs), [PolicySource::Mdm]);
-    assert!(!lock_on(&docs, "allowManagedHooksOnly"));
+    assert_eq!(lock(&docs, "allowManagedHooksOnly"), None);
 }
 
 #[test]
@@ -101,9 +101,12 @@ fn merge_applies_every_admin_source_lowest_rank_first() {
     let docs = claude_policy_docs(&fx.paths, &Options::default());
     let expected = [PolicySource::Files, PolicySource::Mdm, PolicySource::Remote];
     assert_eq!(sources_of(&docs), expected);
-    assert!(lock_on(&docs, "allowManagedHooksOnly"));
-    let last = docs.iter().rev().find_map(|d| d.doc.get("disableAllHooks"));
-    assert_eq!(last, Some(&json!(false)));
+    assert_eq!(lock(&docs, "allowManagedHooksOnly"), Some(true));
+    assert_eq!(lock(&docs, "disableAllHooks"), Some(true));
+    fx.files(json!({ "allowManagedHooksOnly": false }));
+    let docs = claude_policy_docs(&fx.paths, &Options::default());
+    assert_eq!(lock(&docs, "allowManagedHooksOnly"), None);
+    assert_eq!(lock(&docs, "disableAllHooks"), Some(false));
 }
 
 #[test]
@@ -193,11 +196,7 @@ fn invalid_hook_keys_fall_back_like_claude_code() {
     );
 }
 
-#[test]
-fn server_cache_hooks_load_as_managed() {
-    let fx = fixture(no_registry);
-    fx.remote(json!({ "hooks": hooks("remote"), "allowManagedHooksOnly": true }));
-    fx.write("claude/settings.json", &json!({ "hooks": hooks("user") }));
+fn load(fx: &Fixture) -> crate::config::Loaded {
     let cwd = fx.dir.path().join("repo");
     std::fs::create_dir_all(&cwd).unwrap();
     let input = crate::config::LoadInput {
@@ -206,7 +205,15 @@ fn server_cache_hooks_load_as_managed() {
         cwd: &cwd,
         project_trusted: true,
     };
-    let loaded = crate::config::load(&input);
+    crate::config::load(&input)
+}
+
+#[test]
+fn server_cache_hooks_load_as_managed() {
+    let fx = fixture(no_registry);
+    fx.remote(json!({ "hooks": hooks("remote"), "allowManagedHooksOnly": true }));
+    fx.write("claude/settings.json", &json!({ "hooks": hooks("user") }));
+    let loaded = load(&fx);
     let commands: Vec<(&str, Layer)> = loaded
         .hooks
         .iter()
@@ -214,4 +221,16 @@ fn server_cache_hooks_load_as_managed() {
         .collect();
     assert_eq!(commands, [("remote", Layer::Managed)]);
     assert!(loaded.hooks[0].file.ends_with("remote-settings.json"));
+}
+
+#[test]
+fn merge_turns_hooks_off_when_any_source_disables_them() {
+    let fx = fixture(no_registry);
+    fx.remote(json!({
+        "managedSourcesBehavior": "merge",
+        "disableAllHooks": false,
+        "hooks": hooks("remote"),
+    }));
+    fx.files(json!({ "hooks": hooks("file"), "disableAllHooks": true }));
+    assert!(load(&fx).hooks.is_empty());
 }

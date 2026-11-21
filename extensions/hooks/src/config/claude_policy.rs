@@ -189,15 +189,23 @@ fn normalize(mut doc: Value) -> Value {
     doc
 }
 
-/// A lock such as `allowManagedHooksOnly`: on when the value in force in any source is `true`.
-pub fn lock_on(docs: &[PolicyDoc], key: &str) -> bool {
-    docs.chunk_by(|a, b| a.source == b.source).any(|group| {
-        let value = group
-            .iter()
-            .rev()
-            .find_map(|doc| doc.doc.get(key)?.as_bool());
-        value == Some(true)
-    })
+/// A lock such as `allowManagedHooksOnly` or `disableAllHooks`: `true` when the value in force in
+/// any source is `true`, else the value in force in the highest source.
+pub fn lock(docs: &[PolicyDoc], key: &str) -> Option<bool> {
+    let values: Vec<Option<bool>> = docs
+        .chunk_by(|a, b| a.source == b.source)
+        .map(|group| {
+            group
+                .iter()
+                .rev()
+                .find_map(|doc| doc.doc.get(key)?.as_bool())
+        })
+        .collect();
+    if values.contains(&Some(true)) {
+        Some(true)
+    } else {
+        values.last().copied().flatten()
+    }
 }
 
 #[cfg(test)]

@@ -54,15 +54,11 @@ pub struct OsPolicy {
 
 impl OsPolicy {
     pub fn from_env() -> Self {
-        let mut plists = Vec::new();
-        if cfg!(target_os = "macos") {
-            let dir = Path::new("/Library/Managed Preferences");
-            let file = format!("{PLIST_DOMAIN}.plist");
-            if let Some(user) = std::env::var_os("USER").filter(|user| !user.is_empty()) {
-                plists.push(dir.join(user).join(&file));
-            }
-            plists.push(dir.join(file));
-        }
+        let plists = if cfg!(target_os = "macos") {
+            plist_paths(account_name().as_deref())
+        } else {
+            Vec::new()
+        };
         let registry: fn(Hive) -> PolicyRead = reg_query;
         Self {
             plists,
@@ -70,6 +66,22 @@ impl OsPolicy {
             read_registry: cfg!(windows).then_some(registry),
         }
     }
+}
+
+/// The per-user plist of `user`, then the device plist.
+fn plist_paths(user: Option<&str>) -> Vec<PathBuf> {
+    let dir = Path::new("/Library/Managed Preferences");
+    let file = format!("{PLIST_DOMAIN}.plist");
+    let mut plists: Vec<PathBuf> = user.iter().map(|user| dir.join(user).join(&file)).collect();
+    plists.push(dir.join(file));
+    plists
+}
+
+/// The process account name, as Claude Code reads it with `os.userInfo()`.
+fn account_name() -> Option<String> {
+    let output = Command::new("/usr/bin/id").arg("-un").output().ok()?;
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (output.status.success() && !name.is_empty()).then_some(name)
 }
 
 /// A JSON object document. Empty text counts as `{}`, as Claude Code reads an empty file.
@@ -110,13 +122,21 @@ pub fn files(dir: &Path) -> Vec<(PathBuf, PolicyRead)> {
     reads
 }
 
-/// The `remote-settings.json` copy of the server-managed settings, unless it has expired.
+/// The `remote-settings.json` copy of the server-managed settings, unless it has expired. Claude
+/// Code reads a copy that cannot be read or parsed as absent.
 pub fn remote_cache(claude_dir: &Path) -> (PathBuf, PolicyRead) {
     let path = claude_dir.join("remote-settings.json");
-    let age = std::fs::metadata(&path)
-        .and_then(|meta| meta.modified())
-        .ok()
-        .and_then(|modified| SystemTime::now().duration_since(modified).ok());
+    // A fetch that finds the settings unchanged rewrites only the signature file.
+    let signature = claude_dir.join("remote-settings.json.signature.json");
+    let age = [&path, &signature]
+        .into_iter()
+        .filter_map(|file| {
+            std::fs::metadata(file)
+                .and_then(|meta| meta.modified())
+                .ok()
+        })
+        .max()
+        .and_then(|fetched| SystemTime::now().duration_since(fetched).ok());
     if age.is_some_and(|age| age > REMOTE_CACHE_TTL) {
         pi_ext_sdk::info!(
             "hooks: {} is older than 24 hours; skipping it",
@@ -124,8 +144,13 @@ pub fn remote_cache(claude_dir: &Path) -> (PathBuf, PolicyRead) {
         );
         return (path, PolicyRead::Absent);
     }
-    let read = read_file(&path);
-    (path, read)
+    match read_file(&path) {
+        PolicyRead::Broken(reason) => {
+            pi_ext_sdk::warn!("hooks: skipping {}: {reason}", path.display());
+            (path, PolicyRead::Absent)
+        }
+        read => (path, read),
+    }
 }
 
 fn plutil(path: &Path) -> PolicyRead {
@@ -215,20 +240,36 @@ mod tests {
         assert!(matches!(files(dir.path())[0].1, PolicyRead::Broken(_)));
     }
 
+    fn set_modified(path: &Path, time: SystemTime) {
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(time).unwrap();
+    }
+
     #[test]
-    fn an_expired_remote_cache_is_skipped() {
+    fn an_unparsable_or_expired_remote_cache_is_absent() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("remote-settings.json");
+        std::fs::write(&path, "{").unwrap();
+        assert_eq!(remote_cache(dir.path()).1, PolicyRead::Absent);
         std::fs::write(&path, r#"{"disableAllHooks": true}"#).unwrap();
         assert!(matches!(remote_cache(dir.path()).1, PolicyRead::Doc(_)));
         let old = SystemTime::now() - REMOTE_CACHE_TTL - Duration::from_secs(60);
-        std::fs::File::options()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
+        set_modified(&path, old);
         assert_eq!(remote_cache(dir.path()).1, PolicyRead::Absent);
+        let signature = dir.path().join("remote-settings.json.signature.json");
+        std::fs::write(&signature, r#"{"jws": "a.b.c", "receivedAt": 0}"#).unwrap();
+        assert!(matches!(remote_cache(dir.path()).1, PolicyRead::Doc(_)));
+        set_modified(&signature, old);
+        assert_eq!(remote_cache(dir.path()).1, PolicyRead::Absent);
+    }
+
+    #[test]
+    fn the_per_user_plist_comes_first() {
+        let dir = Path::new("/Library/Managed Preferences");
+        let device = dir.join("com.anthropic.claudecode.plist");
+        let user = dir.join("ada/com.anthropic.claudecode.plist");
+        assert_eq!(plist_paths(Some("ada")), [user, device.clone()]);
+        assert_eq!(plist_paths(None), [device]);
     }
 
     #[cfg(target_os = "macos")]

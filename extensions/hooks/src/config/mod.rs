@@ -138,8 +138,8 @@ fn load_claude(input: &LoadInput, options: &Options, loaded: &mut Loaded) -> boo
     let policy_docs = || policy.iter().map(|policy| &policy.doc);
     let user_docs = || docs.iter().map(|(_, _, doc)| doc);
     loaded.http = HttpPolicy::merge(policy_docs().chain(user_docs()));
-    let policy_disable = last_bool(policy_docs(), "disableAllHooks");
-    let managed_only = claude_policy::lock_on(&policy, "allowManagedHooksOnly");
+    let policy_disable = claude_policy::lock(&policy, "disableAllHooks");
+    let managed_only = claude_policy::lock(&policy, "allowManagedHooksOnly") == Some(true);
     let all_off = policy_disable == Some(true);
     let user_off =
         policy_disable.is_none() && last_bool(user_docs(), "disableAllHooks") == Some(true);
