@@ -15,7 +15,8 @@ use super::options::read_json;
 
 pub const CACHE_FILE: &str = "cloud-config-bundle-cache.json";
 const CACHE_VERSION: u64 = 1;
-const HMAC_KEY: &[u8] = b"codex-cloud-config-bundle-cache-v1-6160ae70-bcfd-4ca8-a99b-40f73b3b072e";
+pub(super) const HMAC_KEY: &[u8] =
+    b"codex-cloud-config-bundle-cache-v1-6160ae70-bcfd-4ca8-a99b-40f73b3b072e";
 
 /// Cloud fragments in Codex precedence order, lowest first.
 #[derive(Debug, Default)]
@@ -98,7 +99,7 @@ fn valid_payload(doc: &Value, now: i64) -> Result<&Value, &'static str> {
     }
 }
 
-fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+pub(super) fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
     let mut block = [0_u8; 64];
     if key.len() > block.len() {
         block[..32].copy_from_slice(&Sha256::digest(key));

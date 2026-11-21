@@ -19,6 +19,8 @@ const LEGACY_MANIFESTS: [&str; 3] = [
     ".cursor-plugin/plugin.json",
 ];
 const AGENT_SCHEMA_PREFIX: &str = "https://agent-plugins.org/schemas/";
+/// MCP servers that run inside Codex; Codex's bundled plugins send them cleanup calls.
+const CODEX_ONLY_SERVERS: [&str; 3] = ["node_repl", "cua_repl", "codex_apps"];
 
 /// Plugin hooks from `configs` (config documents, lowest precedence first). `pinned` is the
 /// requirements `[features] plugins` value; `states` holds `[hooks.state]` switches.
@@ -43,8 +45,18 @@ pub fn load(
             continue;
         };
         let root = base.join(version);
-        let sources = hook_sources(&root);
-        if sources.is_empty() {
+        let mut plugin_defs = Vec::new();
+        for (file, key_source, hooks) in hook_sources(&root) {
+            for def in parse_hooks(Source::Codex, Scope::Global, &file, &hooks) {
+                let file_key = def.file.display().to_string();
+                let suffix = &def.codex_state_key()[file_key.len()..];
+                let off = states.get(&format!("{id}:{key_source}{suffix}")) == Some(&false);
+                if !off && !codex_only(&def) {
+                    plugin_defs.push(def);
+                }
+            }
+        }
+        if plugin_defs.is_empty() {
             continue;
         }
         let fingerprint = match fingerprint(&root) {
@@ -63,27 +75,29 @@ pub fn load(
             data: Some(data.display().to_string()),
             env: Vec::new(),
         };
-        for (file, key_source, hooks) in sources {
-            for mut def in parse_hooks(Source::Codex, Scope::Global, &file, &hooks) {
-                let file_key = def.file.display().to_string();
-                let suffix = &def.codex_state_key()[file_key.len()..];
-                if states.get(&format!("{id}:{key_source}{suffix}")) == Some(&false) {
-                    continue;
-                }
-                let trust_file = format!("{file_key}#{fingerprint}");
-                def.hash = trust_hash(
-                    &trust_file,
-                    &def.event,
-                    def.matcher.as_deref(),
-                    &def.handler,
-                );
-                def.layer = Layer::Global;
-                def.plugin = Some(plugin.clone());
-                defs.push(def);
-            }
+        for mut def in plugin_defs {
+            let trust_file = format!("{}#{fingerprint}", def.file.display());
+            def.hash = trust_hash(
+                &trust_file,
+                &def.event,
+                def.matcher.as_deref(),
+                &def.handler,
+            );
+            def.layer = Layer::Global;
+            def.plugin = Some(plugin.clone());
+            defs.push(def);
         }
     }
     defs
+}
+
+fn codex_only(def: &HookDef) -> bool {
+    let server = def.str_field("server").unwrap_or_default();
+    let skip = def.kind() == "mcp_tool" && CODEX_ONLY_SERVERS.contains(&server);
+    if skip {
+        pi_ext_sdk::info!("hooks: skipping {def}: the {server} MCP server runs only in Codex");
+    }
+    skip
 }
 
 /// `[plugins."<plugin>@<marketplace>"] enabled`, merged per key; `_default.enabled` fills gaps.
@@ -154,8 +168,10 @@ fn hook_sources(root: &Path) -> Vec<HookSource> {
                 .filter_map(|path| hook_file(root, path))
                 .collect()
         }
-        Some(hooks @ Value::Object(_)) => inline(&manifest, std::slice::from_ref(hooks)),
-        Some(Value::Array(items)) if items.iter().all(Value::is_object) => inline(&manifest, items),
+        Some(hooks @ Value::Object(_)) if hooks_file(hooks) => {
+            inline(&manifest, std::slice::from_ref(hooks))
+        }
+        Some(Value::Array(items)) if items.iter().all(hooks_file) => inline(&manifest, items),
         Some(_) => {
             pi_ext_sdk::warn!(
                 "hooks: ignoring hooks in {}: unexpected type",
@@ -164,6 +180,13 @@ fn hook_sources(root: &Path) -> Vec<HookSource> {
             default()
         }
     }
+}
+
+/// The Codex `HooksFile` shape: an object with only `description` and `hooks`.
+fn hooks_file(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|map| map.keys().all(|k| k == "description" || k == "hooks"))
 }
 
 fn inline(manifest: &Path, items: &[Value]) -> Vec<HookSource> {

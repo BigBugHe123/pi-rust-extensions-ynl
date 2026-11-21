@@ -135,7 +135,6 @@ fn renders_within_40_and_100_columns() {
     let wide = plain(&view.render(&rows, 100, None)).join("\n");
     for text in [
         "[All (5)]",
-        "Settings (12)",
         "+ Add a hook",
         "Claude Code (2)",
         "Codex (1)",
@@ -152,6 +151,8 @@ fn renders_within_40_and_100_columns() {
     ] {
         assert!(wide.contains(text), "missing {text}:\n{wide}");
     }
+    let settings = format!("Settings ({})", Setting::all().len());
+    assert!(wide.contains(&settings), "missing {settings}:\n{wide}");
     let narrow = plain(&view.render(&rows, 40, None));
     assert!(
         narrow.iter().any(|l| l.contains("● PreToolUse Bash G✓")),

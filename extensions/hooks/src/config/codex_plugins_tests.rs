@@ -77,6 +77,12 @@ fn manifest_hooks_replace_the_default_file() {
         run(),
         ["codex/global plugin p@m:one", "codex/global plugin p@m:two"]
     );
+    write(&manifest, r#"{"hooks":{"hooks":{},"extra":1}}"#);
+    assert_eq!(
+        run(),
+        ["codex/global plugin p@m:default"],
+        "not a HooksFile"
+    );
     let agent = json!({ "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", "name": "p" });
     write(&root.join("plugin.json"), &agent.to_string());
     assert!(run().is_empty(), "Codex 0.171.0 skips Agent Plugins hooks");
@@ -98,7 +104,18 @@ fn hook_state_keys_and_bundle_changes() {
         first[0].hash, second[0].hash,
         "a changed script needs new trust"
     );
-    let states = HashMap::from([("p@m:hooks/hooks.json:stop:0:0".to_owned(), false)]);
+    let cleanup = json!({ "hooks": { "Stop": [{ "hooks": [
+        { "type": "mcp_tool", "server": "node_repl", "tool": "turn_ended" },
+        { "type": "command", "command": "x" }
+    ] }] } });
+    write(&root.join("hooks/hooks.json"), &cleanup.to_string());
+    let defs = load(home, &[&user], None, &HashMap::new());
+    assert_eq!(
+        commands(&defs),
+        ["codex/global plugin p@m:x"],
+        "Codex-only MCP servers"
+    );
+    let states = HashMap::from([("p@m:hooks/hooks.json:stop:0:1".to_owned(), false)]);
     assert!(load(home, &[&user], None, &states).is_empty());
 }
 
