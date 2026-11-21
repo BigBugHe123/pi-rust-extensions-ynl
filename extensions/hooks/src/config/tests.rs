@@ -349,6 +349,29 @@ fn managed_plugin_gates_apply_with_the_claude_source_off() {
 }
 
 #[test]
+fn managed_http_allowlists_apply_with_the_claude_source_off() {
+    let (f, policy) = with_policy();
+    write(
+        &f.cwd.join(".pi/ext/hooks.json"),
+        r#"{"sources":{"claude":false}}"#,
+    );
+    write(
+        &f.paths.claude_dir.join("settings.json"),
+        r#"{"allowedHttpHookUrls":["https://user.example.com/*"]}"#,
+    );
+    write(
+        &policy.join("managed-settings.json"),
+        r#"{"allowedHttpHookUrls":["https://hooks.example.com/*"],"httpHookAllowedEnvVars":["TOKEN"]}"#,
+    );
+    let http = load_with(&f, true).http;
+    assert_eq!(
+        http.urls,
+        Some(vec!["https://hooks.example.com/*".to_owned()])
+    );
+    assert_eq!(http.env_vars, Some(vec!["TOKEN".to_owned()]));
+}
+
+#[test]
 fn codex_layers_and_hook_state() {
     let f = fixture();
     let system = f.cwd.parent().unwrap().join("etc-codex");

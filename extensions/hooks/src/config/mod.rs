@@ -75,13 +75,15 @@ pub fn load(input: &LoadInput) -> Loaded {
         .as_deref()
         .map(managed::claude_policy_docs)
         .unwrap_or_default();
+    let policy_docs = || policy.iter().map(|(_, doc)| doc);
     let off = if options.claude {
         load_claude(input, &options, &policy, &mut loaded)
     } else {
+        loaded.http = HttpPolicy::merge(policy_docs());
         claude_hooks_off(&policy, std::iter::empty())
     };
     let plugin_gate = PluginGate {
-        managed: managed::enabled_plugins(policy.iter().map(|(_, doc)| doc)),
+        managed: managed::enabled_plugins(policy_docs()),
         off,
         forced: options.switch_on("managed/forceEnabledPlugins"),
     };
