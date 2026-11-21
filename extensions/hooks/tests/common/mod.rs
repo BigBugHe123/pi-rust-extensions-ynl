@@ -84,8 +84,12 @@ impl TestHost {
     }
 
     pub async fn initialize(&mut self) -> Value {
+        self.initialize_as("0.8.0").await
+    }
+
+    pub async fn initialize_as(&mut self, pi_version: &str) -> Value {
         let params = json!({
-            "protocolVersion": 1, "piVersion": "0.8.0", "cwd": "/work",
+            "protocolVersion": 1, "piVersion": pi_version, "cwd": "/work",
             "agentDir": "/home/u/.pi/agent", "extensionPath": "native:test/test",
             "platform": "darwin", "mode": "tui", "hasUI": true, "flags": {}
         });
