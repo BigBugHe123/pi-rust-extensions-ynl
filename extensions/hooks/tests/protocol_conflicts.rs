@@ -25,6 +25,7 @@ fn env() -> Env {
         codex_home: base.join("codex"),
         codex_system: Some(base.join("codex-system")),
         claude_policy: Some(base.join("claude-policy")),
+        claude_os_policy: None,
         temp_dir: base.join("tmp"),
         agent_dir: Some(base.join("agent")),
     };
