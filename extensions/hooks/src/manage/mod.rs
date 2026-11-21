@@ -41,7 +41,8 @@ pub fn check_scope(scope: Scope, project_trusted: bool) -> Result<()> {
     Ok(())
 }
 
-/// Adds or removes `def.hash` in the `disabled` list of the pi options file `file`.
+/// Adds `def.disabled_key()` to, or removes the keys of `def` from, the `disabled` list of the
+/// pi options file `file`.
 pub fn set_disabled(file: &Path, def: &HookDef, disabled: bool, trusted: bool) -> Result<()> {
     check_scope(def.scope, trusted)?;
     if !disabled && !file.exists() {
@@ -59,14 +60,15 @@ pub fn set_disabled(file: &Path, def: &HookDef, disabled: bool, trusted: bool) -
                 .collect()
         })
         .unwrap_or_default();
-    let had = list.contains(&def.hash);
-    if had == disabled {
+    let (key, keys) = (def.disabled_key(), def.disabled_keys());
+    let had = list.iter().any(|h| h == key);
+    let stale = list.iter().any(|h| h != key && keys.contains(&h.as_str()));
+    if had == disabled && !stale {
         return Ok(());
     }
+    list.retain(|h| !keys.contains(&h.as_str()));
     if disabled {
-        list.push(def.hash.clone());
-    } else {
-        list.retain(|h| h != &def.hash);
+        list.push(key.to_owned());
     }
     if list.is_empty() {
         root.remove("disabled");

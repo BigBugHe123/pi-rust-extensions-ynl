@@ -79,7 +79,7 @@ pub const SWITCHES: &[Switch] = &[
     Switch {
         key: CODEX_CLOUD,
         label: "Codex cloud",
-        about: "Cloud config fragments cached in $CODEX_HOME; hooks need trust",
+        about: "The cloud bundle cache in $CODEX_HOME; hooks need trust",
         default: true,
     },
     Switch {

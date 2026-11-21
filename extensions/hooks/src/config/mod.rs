@@ -1,4 +1,5 @@
 pub mod codex;
+mod codex_bundled;
 mod codex_cloud;
 mod codex_managed;
 pub(crate) mod codex_plugin_bundle;
@@ -192,10 +193,8 @@ fn load_codex(input: &LoadInput, options: &Options, loaded: &mut Loaded) {
         layers.push((Scope::Global, Layer::Managed, codex::load_layer(system)));
     }
     if scoped(Scope::Global) {
-        if options.switch_on(options::CODEX_CLOUD) {
-            let cloud = codex_cloud::load(&input.paths.codex_home);
-            layers.extend(cloud.into_iter().map(|l| (Scope::Global, Layer::Global, l)));
-        }
+        let cloud = std::mem::take(&mut sources.cloud_configs);
+        layers.extend(cloud.into_iter().map(|l| (Scope::Global, Layer::Global, l)));
         let user = codex::load_layer(&input.paths.codex_home);
         layers.push((Scope::Global, Layer::Global, user));
     }
@@ -237,7 +236,6 @@ fn load_codex(input: &LoadInput, options: &Options, loaded: &mut Loaded) {
     let states = codex::hook_states(&input.paths.codex_home);
     let configs: Vec<&Value> = layers
         .iter()
-        .filter(|(scope, _, _)| *scope == Scope::Global)
         .filter_map(|(_, _, l)| l.config.as_ref())
         .collect();
     let plugins = (!managed_only

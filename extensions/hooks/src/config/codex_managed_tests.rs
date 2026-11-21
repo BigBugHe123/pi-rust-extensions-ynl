@@ -87,64 +87,64 @@ fn write_cache(home: &Path, config: &str, requirements: &str) {
     write(&home.join(codex_cloud::CACHE_FILE), &doc.to_string());
 }
 
-#[test]
-fn load_follows_codex_precedence_and_switches() {
-    let dir = tempfile::tempdir().unwrap();
-    let base = dir.path();
-    let system = base.join("etc");
-    let paths = Paths {
+fn test_paths(base: &Path) -> Paths {
+    Paths {
         claude_dir: base.join("claude"),
         codex_home: base.join("codex"),
-        codex_system: Some(system.clone()),
+        codex_system: Some(base.join("etc")),
         claude_policy: None,
         codex_mdm: None,
         temp_dir: base.join("tmp"),
         agent_dir: None,
+    }
+}
+
+/// `<command>:<layer>` of each hook that `config::load` returns, with `off` switches off.
+fn summaries(paths: &Paths, base: &Path, off: &[&str]) -> Vec<String> {
+    let switches: serde_json::Map<String, Value> = off
+        .iter()
+        .map(|k| (k.split('/').nth(1).unwrap().to_owned(), json!(false)))
+        .collect();
+    let agent = base.join("agent");
+    let options = json!({ "managed": switches }).to_string();
+    write(&agent.join("ext/hooks.json"), &options);
+    let input = crate::config::LoadInput {
+        paths,
+        agent_dir: &agent,
+        cwd: &base.join("repo"),
+        project_trusted: true,
     };
+    let loaded = crate::config::load(&input);
+    let hooks = loaded.hooks.iter();
+    hooks
+        .map(|h| format!("{}:{}", h.summary(), h.layer.name()))
+        .collect()
+}
+
+#[test]
+fn load_follows_codex_precedence_and_switches() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path();
+    let paths = test_paths(base);
+    let system = base.join("etc");
     let requirements = format!("allow_managed_hooks_only = true\n{}", stop_hook("req"));
     write(&system.join("requirements.toml"), &requirements);
     write(&system.join("config.toml"), &stop_hook("sys"));
     write(&paths.codex_home.join("config.toml"), &stop_hook("user"));
-    write_cache(
-        &paths.codex_home,
-        &stop_hook("cloud"),
-        "allow_managed_hooks_only = false\n[features]\nhooks = false\n",
-    );
-    let (agent, cwd) = (base.join("agent"), base.join("repo"));
-    write(
-        &cwd.join(".codex/config.toml"),
-        "[features]\nhooks = true\n",
-    );
-    let run = |off: &[&str]| {
-        let switches: serde_json::Map<String, Value> = off
-            .iter()
-            .map(|k| (k.split('/').nth(1).unwrap().to_owned(), json!(false)))
-            .collect();
-        write(
-            &agent.join("ext/hooks.json"),
-            &json!({ "managed": switches }).to_string(),
-        );
-        let input = crate::config::LoadInput {
-            paths: &paths,
-            agent_dir: &agent,
-            cwd: &cwd,
-            project_trusted: true,
-        };
-        let loaded = crate::config::load(&input);
-        let hooks = loaded.hooks.iter();
-        hooks
-            .map(|h| format!("{}:{}", h.summary(), h.layer.name()))
-            .collect::<Vec<_>>()
-    };
+    let loose = "allow_managed_hooks_only = false\n[features]\nhooks = true\n";
+    write_cache(&paths.codex_home, &stop_hook("cloud"), loose);
+    let project = "[features]\nhooks = true\n";
+    write(&base.join("repo/.codex/config.toml"), project);
+    let run = |off: &[&str]| summaries(&paths, base, off);
     assert_eq!(
         run(&[]),
         ["req:managed", "sys:managed"],
-        "a signed cloud cache cannot lift allow_managed_hooks_only"
+        "a cloud allow_managed_hooks_only = false does not loosen requirements.toml"
     );
     assert_eq!(
         run(&[options::CODEX_REQUIREMENTS]),
         ["sys:managed", "cloud:global", "user:global"],
-        "cloud hooks need trust and the cache cannot pin [features] hooks"
+        "cloud hooks need trust"
     );
     assert_eq!(
         run(&[options::CODEX_REQUIREMENTS, options::CODEX_CLOUD]),
@@ -158,9 +158,34 @@ fn load_follows_codex_precedence_and_switches() {
         );
         assert!(
             run(&[options::CODEX_REQUIREMENTS]).is_empty(),
-            "managed_config.toml beats the project layer"
+            "managed_config.toml beats the project layer and a cloud hooks = true"
         );
         let off = [options::CODEX_REQUIREMENTS, options::CODEX_LEGACY];
         assert_eq!(run(&off).len(), 3);
     }
+}
+
+#[test]
+fn cloud_requirements_apply_only_when_stricter() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path();
+    let paths = test_paths(base);
+    write(&base.join("etc/config.toml"), &stop_hook("sys"));
+    write(&paths.codex_home.join("config.toml"), &stop_hook("user"));
+    let run = |requirements: &str| {
+        write_cache(&paths.codex_home, &stop_hook("cloud"), requirements);
+        summaries(&paths, base, &[])
+    };
+    assert_eq!(run("allow_managed_hooks_only = true\n"), ["sys:managed"]);
+    assert!(run("[features]\nhooks = false\n").is_empty());
+    assert_eq!(
+        run(&stop_hook("cloudreq")),
+        [
+            "sys:managed",
+            "cloud:global",
+            "cloudreq:global",
+            "user:global"
+        ],
+        "requirements hooks need trust"
+    );
 }

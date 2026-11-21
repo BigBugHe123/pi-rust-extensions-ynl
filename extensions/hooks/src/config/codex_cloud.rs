@@ -1,5 +1,5 @@
-//! Codex cloud config fragments from the cache Codex writes after a bundle fetch (Codex 0.171.0
-//! codex-rs/cloud-config/src/cache.rs). Its HMAC key is public, so its hooks load as user hooks.
+//! Codex cloud fragments from the cache Codex writes after a bundle fetch (Codex 0.171.0 cache.rs).
+//! Its HMAC key is public: its hooks need trust and its requirements apply only when stricter.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,6 +10,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::codex::{CodexLayer, parse_toml};
+use super::managed::Requirements;
 use super::options::read_json;
 
 pub const CACHE_FILE: &str = "cloud-config-bundle-cache.json";
@@ -17,42 +18,91 @@ const CACHE_VERSION: u64 = 1;
 pub(super) const HMAC_KEY: &[u8] =
     b"codex-cloud-config-bundle-cache-v1-6160ae70-bcfd-4ca8-a99b-40f73b3b072e";
 
-/// Cloud config fragments in Codex precedence order, lowest first. Requirements fragments are
-/// not read.
-pub fn load(codex_home: &Path) -> Vec<CodexLayer> {
+/// Cloud fragments in Codex precedence order, lowest first.
+#[derive(Debug, Default)]
+pub struct CloudSources {
+    /// Requirements fragments without `[hooks]` and without values that loosen hooks.
+    pub requirements: Vec<Requirements>,
+    /// Config fragments, then the `[hooks]` of requirements fragments.
+    pub configs: Vec<CodexLayer>,
+}
+
+pub fn load(codex_home: &Path) -> CloudSources {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
     load_at(&codex_home.join(CACHE_FILE), now)
 }
 
-fn load_at(file: &Path, now: i64) -> Vec<CodexLayer> {
+fn load_at(file: &Path, now: i64) -> CloudSources {
     let Some(doc) = read_json(file) else {
-        return Vec::new();
+        return CloudSources::default();
     };
     let payload = match valid_payload(&doc, now) {
         Ok(payload) => payload,
         Err(reason) => {
             pi_ext_sdk::info!("hooks: skipping {}: {reason}", file.display());
-            return Vec::new();
+            return CloudSources::default();
         }
     };
-    let items = payload.pointer("/bundle/config_toml/enterprise_managed");
-    let mut layers: Vec<CodexLayer> = items
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|fragment| {
-            let id = fragment.get("id")?.as_str()?;
-            let contents = fragment.get("contents")?.as_str()?;
-            let label = format!("{}#config_toml/{id}", file.display());
-            let doc = parse_toml(contents, &label)?;
-            Some(CodexLayer::from_config(PathBuf::from(label), doc))
-        })
-        .collect();
-    // Bundle fragments arrive highest priority first.
-    layers.reverse();
-    layers
+    let fragments = |kind: &str| -> Vec<(PathBuf, Value)> {
+        let pointer = format!("/bundle/{kind}/enterprise_managed");
+        let items = payload.pointer(&pointer).and_then(Value::as_array);
+        let mut docs: Vec<(PathBuf, Value)> = items
+            .into_iter()
+            .flatten()
+            .filter_map(|fragment| {
+                let id = fragment.get("id")?.as_str()?;
+                let contents = fragment.get("contents")?.as_str()?;
+                let label = format!("{}#{kind}/{id}", file.display());
+                Some((PathBuf::from(&label), parse_toml(contents, &label)?))
+            })
+            .collect();
+        // Bundle fragments arrive highest priority first.
+        docs.reverse();
+        docs
+    };
+    let mut sources = CloudSources::default();
+    for (file, doc) in fragments("config_toml") {
+        sources.configs.push(CodexLayer::from_config(file, doc));
+    }
+    for (file, doc) in fragments("requirements_toml") {
+        let mut requirements = stricter_only(Requirements::from_doc(file, &doc));
+        if let Some(hooks) = requirements.hooks.take() {
+            let hooks = vec![(requirements.file.clone(), hooks)];
+            sources.configs.push(CodexLayer {
+                hooks,
+                ..CodexLayer::default()
+            });
+        }
+        sources.requirements.push(requirements);
+    }
+    sources
+}
+
+/// Drops, with a log line, each value that would loosen what a lower requirements layer or a
+/// config layer sets.
+fn stricter_only(mut requirements: Requirements) -> Requirements {
+    let file = requirements.file.display().to_string();
+    let values = [
+        (
+            "allow_managed_hooks_only",
+            &mut requirements.managed_only,
+            true,
+        ),
+        ("[features] hooks", &mut requirements.feature, false),
+        ("[features] plugins", &mut requirements.plugins, false),
+    ];
+    for (key, value, strict) in values {
+        if value.is_some_and(|v| v != strict) {
+            pi_ext_sdk::info!(
+                "hooks: ignoring {key} = {} in {file}: cloud requirements apply only when stricter",
+                !strict
+            );
+            *value = None;
+        }
+    }
+    requirements
 }
 
 /// Codex's checks without the auth identity: signature, version, identity fields, expiry.
@@ -209,11 +259,13 @@ mod tests {
     fn a_signed_fresh_cache_loads_lowest_fragment_first() {
         let dir = tempfile::tempdir().unwrap();
         let file = cache(dir.path(), "2026-11-21T10:00:00Z", true);
-        let configs = load_at(&file, unix_seconds("2026-11-21T09:30:00Z").unwrap());
-        assert_eq!(configs.len(), 2, "requirements fragments are not read");
-        assert_eq!(configs[0].feature, Some(false));
-        assert_eq!(configs[1].hooks.len(), 1);
-        let label = configs[1].hooks[0].0.display().to_string();
+        let sources = load_at(&file, unix_seconds("2026-11-21T09:30:00Z").unwrap());
+        assert_eq!(sources.requirements.len(), 1);
+        assert_eq!(sources.requirements[0].managed_only, Some(true));
+        assert_eq!(sources.configs.len(), 2);
+        assert_eq!(sources.configs[0].feature, Some(false));
+        assert_eq!(sources.configs[1].hooks.len(), 1);
+        let label = sources.configs[1].hooks[0].0.display().to_string();
         assert!(label.ends_with("#config_toml/high"), "{label}");
     }
 
@@ -222,12 +274,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let now = unix_seconds("2026-11-21T11:00:00Z").unwrap();
         let file = cache(dir.path(), "2026-11-21T10:00:00Z", true);
-        assert!(load_at(&file, now).is_empty());
+        assert!(load_at(&file, now).configs.is_empty());
         let file = cache(dir.path(), "2026-11-21T12:00:00Z", false);
-        assert!(load_at(&file, now).is_empty());
+        assert!(load_at(&file, now).configs.is_empty());
         let file = cache(dir.path(), "2026-11-21T12:00:00Z", true);
         let text = std::fs::read_to_string(&file).unwrap();
         std::fs::write(&file, text.replace("user-1", "user-2")).unwrap();
-        assert!(load_at(&file, now).is_empty());
+        assert!(load_at(&file, now).configs.is_empty());
     }
 }

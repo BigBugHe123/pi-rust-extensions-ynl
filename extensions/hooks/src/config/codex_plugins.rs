@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::codex::feature;
+use super::codex_bundled::is_codex_bundled;
 use super::codex_plugin_bundle::{active_version, bundle_trust_hash, fingerprint};
 use super::options::read_json;
 use super::parse_hooks;
@@ -19,8 +20,6 @@ const LEGACY_MANIFESTS: [&str; 3] = [
     ".cursor-plugin/plugin.json",
 ];
 const AGENT_SCHEMA_PREFIX: &str = "https://agent-plugins.org/schemas/";
-/// MCP servers that run inside Codex; Codex's bundled plugins send them cleanup calls.
-const CODEX_ONLY_SERVERS: [&str; 3] = ["node_repl", "cua_repl", "codex_apps"];
 
 /// Plugin hooks from `configs` (config documents, lowest precedence first). `pinned` is the
 /// requirements `[features] plugins` value; `states` holds `[hooks.state]` switches.
@@ -51,7 +50,7 @@ pub fn load(
                 let file_key = def.file.display().to_string();
                 let suffix = &def.codex_state_key()[file_key.len()..];
                 let off = states.get(&format!("{id}:{key_source}{suffix}")) == Some(&false);
-                if !off && !codex_only(&def) {
+                if !off && !codex_only(&id, &def) {
                     plugin_defs.push(def);
                 }
             }
@@ -76,7 +75,8 @@ pub fn load(
             env: Vec::new(),
         };
         for mut def in plugin_defs {
-            def.hash = bundle_trust_hash(&def, &fingerprint);
+            let trust = bundle_trust_hash(&def, &fingerprint);
+            def.stable_hash = Some(std::mem::replace(&mut def.hash, trust));
             def.layer = Layer::Global;
             def.plugin = Some(plugin.clone());
             defs.push(def);
@@ -85,11 +85,12 @@ pub fn load(
     defs
 }
 
-fn codex_only(def: &HookDef) -> bool {
-    let server = def.str_field("server").unwrap_or_default();
-    let skip = def.kind() == "mcp_tool" && CODEX_ONLY_SERVERS.contains(&server);
+fn codex_only(id: &str, def: &HookDef) -> bool {
+    let skip = is_codex_bundled(id, def);
     if skip {
-        pi_ext_sdk::info!("hooks: skipping {def}: the {server} MCP server runs only in Codex");
+        pi_ext_sdk::info!(
+            "hooks: skipping {def}: Codex's bundled {id} hook calls a server that runs only in Codex"
+        );
     }
     skip
 }

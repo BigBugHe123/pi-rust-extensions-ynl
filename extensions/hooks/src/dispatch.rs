@@ -195,7 +195,7 @@ fn select(rt: &Runtime, d: &Dispatch, cwd: &Path) -> Vec<HookDef> {
             (Some(rule), Some((name, input))) => if_rule_matches(rule, name, input, cwd),
             _ => true,
         })
-        .filter(|def| def.layer == Layer::Managed || !rt.is_disabled(&def.hash))
+        .filter(|def| def.layer == Layer::Managed || !rt.is_disabled(def))
         .filter(|def| !(def.kind() == "mcp_tool" && before_mcp(&def.event, &d.payload)))
         .filter(supported)
         .filter(|def| url_allowed(&http, def))

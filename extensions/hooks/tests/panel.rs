@@ -286,3 +286,34 @@ async fn settings_tab_sets_the_conflict_mode_in_place() {
     assert_eq!(doc["conflicts"], "override");
     host.finish().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_disabled_codex_plugin_hook_stays_disabled_after_its_files_change() {
+    let env = env();
+    std::fs::write(env.paths.claude_dir.join("settings.json"), "{}").unwrap();
+    let root = env.paths.codex_home.join("plugins/cache/m/p/1.0.0");
+    std::fs::create_dir_all(root.join(".codex-plugin")).unwrap();
+    std::fs::create_dir_all(root.join("hooks")).unwrap();
+    std::fs::write(root.join(".codex-plugin/plugin.json"), r#"{"name":"p"}"#).unwrap();
+    let hooks = json!({ "hooks": { "PreToolUse": [{ "matcher": "^Bash$",
+        "hooks": [{ "type": "command", "command": DENY }] }] } });
+    std::fs::write(root.join("hooks/hooks.json"), hooks.to_string()).unwrap();
+    let config = "[plugins.\"p@m\"]\nenabled = true\n";
+    std::fs::write(env.paths.codex_home.join("config.toml"), config).unwrap();
+    let mut host = TestHost::start(extension(env.paths.clone()));
+    host.initialize().await;
+    assert!(blocked(&mut host, 1, &env).await);
+
+    let (panel, surface, _) = open(&mut host, 2, ctx(&env, true)).await;
+    key(&mut host, &surface, DOWN).await;
+    let lines = key(&mut host, &surface, RIGHT).await;
+    assert!(lines.contains("Disabled PreToolUse"), "{lines}");
+    close(&mut host, 2, &panel, &surface).await;
+
+    std::fs::write(root.join("hooks/run.sh"), "echo changed").unwrap();
+    let (panel, surface, lines) = open(&mut host, 3, ctx(&env, true)).await;
+    assert!(lines.contains("○ PreToolUse"), "{lines}");
+    close(&mut host, 3, &panel, &surface).await;
+    assert!(!blocked(&mut host, 4, &env).await);
+    host.finish().await.unwrap();
+}

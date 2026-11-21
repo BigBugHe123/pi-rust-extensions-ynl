@@ -105,19 +105,45 @@ fn hook_state_keys_and_bundle_changes() {
         first[0].hash, second[0].hash,
         "a changed script needs new trust"
     );
-    let cleanup = json!({ "hooks": { "Stop": [{ "hooks": [
-        { "type": "mcp_tool", "server": "node_repl", "tool": "turn_ended" },
-        { "type": "command", "command": "x" }
-    ] }] } });
-    write(&root.join("hooks/hooks.json"), &cleanup.to_string());
-    let defs = load(home, &[&user], None, &HashMap::new());
-    assert_eq!(
-        commands(&defs),
-        ["codex/global plugin p@m:x"],
-        "Codex-only MCP servers"
-    );
-    let states = HashMap::from([("p@m:hooks/hooks.json:stop:0:1".to_owned(), false)]);
+    let states = HashMap::from([("p@m:hooks/hooks.json:stop:0:0".to_owned(), false)]);
     assert!(load(home, &[&user], None, &states).is_empty());
+}
+
+#[test]
+fn only_hooks_on_codex_bundled_allowlist_are_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let cleanup = json!({ "hooks": {
+        "Stop": [{ "hooks": [
+            { "type": "mcp_tool", "server": "node_repl", "tool": "turn_ended", "input": { "a": 1 } },
+            { "type": "command", "command": "x" }
+        ] }],
+        "PreToolUse": [{ "matcher": "Bash", "hooks": [
+            { "type": "mcp_tool", "server": "node_repl", "tool": "turn_ended" }
+        ] }]
+    } });
+    let mut users = Vec::new();
+    for id in ["browser@openai-bundled", "p@m"] {
+        let root = install(home, id, "1.0.0");
+        write(&root.join(".codex-plugin/plugin.json"), r#"{"name":"x"}"#);
+        write(&root.join("hooks/hooks.json"), &cleanup.to_string());
+        users.push(json!({ "plugins": { id: {} } }));
+    }
+    let run = |user: &Value| commands(&load(home, &[user], None, &HashMap::new()));
+    let bundled = "codex/global plugin browser@openai-bundled";
+    assert_eq!(
+        run(&users[0]),
+        [
+            format!("{bundled}:x"),
+            format!("{bundled}:mcp: node_repl/turn_ended")
+        ],
+        "the cleanup hook without a matcher is skipped"
+    );
+    assert_eq!(
+        run(&users[1]).len(),
+        3,
+        "other plugins keep node_repl hooks"
+    );
 }
 
 #[test]
@@ -168,7 +194,7 @@ fn switches_and_managed_only_gate_plugin_hooks() {
 }
 
 #[test]
-fn project_layers_cannot_enable_plugins() {
+fn project_layers_turn_plugins_on_and_off_as_in_codex() {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path();
     let paths = Paths {
@@ -183,19 +209,22 @@ fn project_layers_cannot_enable_plugins() {
     let root = install(&paths.codex_home, "p@m", "1.0.0");
     write(&root.join(".codex-plugin/plugin.json"), r#"{"name":"p"}"#);
     write(&root.join("hooks/hooks.json"), &hooks("plug").to_string());
-    let user = "[plugins.\"p@m\"]\nenabled = false\n";
-    write(&paths.codex_home.join("config.toml"), user);
     let cwd = base.join("repo");
-    let project = "[features]\nplugins = true\n[plugins.\"p@m\"]\nenabled = true\n";
-    write(&cwd.join(".codex/config.toml"), project);
     let agent = base.join("agent");
-    let input = LoadInput {
-        paths: &paths,
-        agent_dir: &agent,
-        cwd: &cwd,
-        project_trusted: true,
+    let run = |user: bool, project: bool| {
+        let table = |on: bool| format!("[plugins.\"p@m\"]\nenabled = {on}\n");
+        write(&paths.codex_home.join("config.toml"), &table(user));
+        write(&cwd.join(".codex/config.toml"), &table(project));
+        let input = LoadInput {
+            paths: &paths,
+            agent_dir: &agent,
+            cwd: &cwd,
+            project_trusted: true,
+        };
+        commands(&load_config(&input).hooks)
     };
-    assert!(commands(&load_config(&input).hooks).is_empty());
+    assert_eq!(run(false, true), ["codex/global plugin p@m:plug"]);
+    assert!(run(true, false).is_empty());
 }
 
 #[test]
