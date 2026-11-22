@@ -49,6 +49,13 @@ pub struct Switch {
     pub default: bool,
 }
 
+pub const CODEX_SYSTEM: &str = "managed/codexSystem";
+pub const CODEX_REQUIREMENTS: &str = "managed/codexRequirements";
+pub const CODEX_MDM: &str = "managed/codexMdm";
+pub const CODEX_CLOUD: &str = "managed/codexCloud";
+pub const CODEX_LEGACY: &str = "managed/codexLegacy";
+pub const CODEX_PLUGINS: &str = "plugins/codex";
+
 /// The switches that features add, in Settings tab order.
 pub const SWITCHES: &[Switch] = &[
     Switch {
@@ -79,6 +86,42 @@ pub const SWITCHES: &[Switch] = &[
         key: "managed/forceEnabledPlugins",
         label: "Force-enabled plugin hooks",
         about: "Run hooks of plugins that Claude managed enabledPlugins sets to true, under allowManagedHooksOnly or a non-managed disableAllHooks.",
+        default: true,
+    },
+    Switch {
+        key: CODEX_SYSTEM,
+        label: "Codex system hooks",
+        about: "hooks.json and config.toml in the Codex system dir",
+        default: true,
+    },
+    Switch {
+        key: CODEX_REQUIREMENTS,
+        label: "Codex requirements.toml",
+        about: "[hooks] and hook pins of the system requirements.toml",
+        default: true,
+    },
+    Switch {
+        key: CODEX_MDM,
+        label: "Codex MDM",
+        about: "macOS managed preferences of com.openai.codex",
+        default: true,
+    },
+    Switch {
+        key: CODEX_CLOUD,
+        label: "Codex cloud",
+        about: "The cloud bundle cache in $CODEX_HOME; hooks need trust",
+        default: true,
+    },
+    Switch {
+        key: CODEX_LEGACY,
+        label: "Codex managed_config.toml",
+        about: "Legacy /etc/codex/managed_config.toml (Unix)",
+        default: true,
+    },
+    Switch {
+        key: CODEX_PLUGINS,
+        label: "Codex plugin hooks",
+        about: "Hooks of enabled plugins in $CODEX_HOME/plugins/cache",
         default: true,
     },
 ];

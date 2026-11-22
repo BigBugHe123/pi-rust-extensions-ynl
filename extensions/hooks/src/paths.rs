@@ -13,6 +13,8 @@ pub struct Paths {
     pub claude_policy: Option<PathBuf>,
     /// Claude Code MDM plist and registry readers; `None` reads neither.
     pub claude_os_policy: Option<OsPolicy>,
+    /// macOS managed preferences dir (`/Library/Managed Preferences`) for Codex MDM payloads.
+    pub codex_mdm: Option<PathBuf>,
     pub temp_dir: PathBuf,
     /// Overrides the agent dir from `initialize`.
     pub agent_dir: Option<PathBuf>,
@@ -34,6 +36,8 @@ impl Paths {
             codex_system: codex_system_dir(),
             claude_policy: Some(claude_policy_dir()),
             claude_os_policy: Some(OsPolicy::from_env()),
+            codex_mdm: cfg!(target_os = "macos")
+                .then(|| PathBuf::from("/Library/Managed Preferences")),
             temp_dir: std::env::temp_dir(),
             agent_dir: None,
         }

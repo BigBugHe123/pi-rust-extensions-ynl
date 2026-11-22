@@ -26,6 +26,7 @@ fn env(hooks: Value) -> Env {
         codex_system: None,
         claude_policy: None,
         claude_os_policy: None,
+        codex_mdm: None,
         temp_dir: base.join("tmp"),
         agent_dir: Some(base.join("agent")),
     };

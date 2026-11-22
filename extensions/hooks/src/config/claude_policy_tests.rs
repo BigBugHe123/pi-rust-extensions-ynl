@@ -67,6 +67,7 @@ fn fixture(read_registry: fn(Hive) -> PolicyRead) -> Fixture {
             read_plist: sources::read_file,
             read_registry: Some(read_registry),
         }),
+        codex_mdm: None,
         temp_dir: base.join("tmp"),
         agent_dir: None,
     };

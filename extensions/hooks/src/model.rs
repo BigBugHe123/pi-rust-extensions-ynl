@@ -101,6 +101,8 @@ pub struct HookDef {
     pub handler: Value,
     pub plugin: Option<Plugin>,
     pub hash: String,
+    /// The hash without the plugin fingerprint of a Codex plugin hook, for `disabled` lists.
+    pub stable_hash: Option<String>,
     /// Matcher group and handler index in the file, for Codex `[hooks.state]` keys.
     pub position: (usize, usize),
     /// A managed hook from a source the user can write: the server-managed copy or HKCU.
@@ -127,6 +129,7 @@ impl HookDef {
             handler,
             plugin: None,
             hash,
+            stable_hash: None,
             position: (0, 0),
             user_writable: false,
         }
@@ -135,6 +138,16 @@ impl HookDef {
     /// Runs without a trust prompt because organization policy deployed it.
     pub fn trusted_by_policy(&self) -> bool {
         self.layer == Layer::Managed && !self.user_writable
+    }
+
+    /// The key pi writes to a `disabled` list. It stays the same when plugin files change.
+    pub fn disabled_key(&self) -> &str {
+        self.stable_hash.as_deref().unwrap_or(&self.hash)
+    }
+
+    /// The keys that disable this hook: `disabled_key` and the full hash of older entries.
+    pub fn disabled_keys(&self) -> [&str; 2] {
+        [self.disabled_key(), &self.hash]
     }
 
     pub fn str_field(&self, key: &str) -> Option<&str> {
