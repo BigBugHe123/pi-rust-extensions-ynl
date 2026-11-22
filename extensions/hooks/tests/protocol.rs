@@ -24,6 +24,9 @@ fn env() -> Env {
         claude_dir: base.join("claude"),
         codex_home: base.join("codex"),
         codex_system: None,
+        claude_policy: None,
+        claude_os_policy: None,
+        codex_mdm: None,
         temp_dir: base.join("tmp"),
         agent_dir: Some(base.join("agent")),
     };
@@ -132,6 +135,45 @@ async fn updated_input_patches_the_event() {
         json!({ "patch": { "input": { "command": "ls -la", "timeout": null } } })
     );
     host.finish().await.unwrap();
+}
+
+#[tokio::test]
+async fn codex_on_failure_follows_the_global_switch() {
+    let reason =
+        "PreToolUse hook failed. This hook is configured to block continuation on failure.";
+    for (options, blocked) in [
+        (None, false),
+        (Some("agent/ext/hooks.json"), true),
+        (Some("repo/.pi/ext/hooks.json"), false),
+    ] {
+        let env = env();
+        let cmd = script(&env, "fail.sh", "cat > /dev/null\nexit 1");
+        let hook = json!({ "type": "command", "command": cmd, "onFailure": "block" });
+        let group = json!({ "matcher": "Bash", "hooks": [hook] });
+        let file = env.paths.codex_home.join("hooks.json");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            json!({ "hooks": { "PreToolUse": [group] } }).to_string(),
+        )
+        .unwrap();
+        if let Some(options) = options {
+            let path = env.dir.path().join(options);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, json!({ "codex": { "onFailure": true } }).to_string()).unwrap();
+        }
+        let mut host = start(&env).await;
+        let ctx = hooks_ctx(&env.cwd, false, true);
+        let response = host
+            .event(1, "tool_call", tool_call(json!({ "command": "ls" })), ctx)
+            .await;
+        let result = &response["result"]["result"];
+        assert_eq!(result["block"] == true, blocked, "{options:?}: {response}");
+        if blocked {
+            assert_eq!(result["reason"], reason);
+        }
+        host.finish().await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -280,5 +322,52 @@ async fn untrusted_hook_asks_and_remembers() {
         json!({}),
         "trusted hook runs without asking"
     );
+    host.finish().await.unwrap();
+}
+
+#[tokio::test]
+async fn pre_tool_use_continue_false_lets_the_tool_run() {
+    let env = env();
+    let out = r#"{"continue":false,"stopReason":"halt after this"}"#;
+    let cmd = script(&env, "stop.sh", &format!("cat > /dev/null\necho '{out}'"));
+    write_hooks(
+        &env.paths.claude_dir.join("settings.json"),
+        "PreToolUse",
+        Some("Bash"),
+        &cmd,
+    );
+    let mut host = start(&env).await;
+    let ctx = hooks_ctx(&env.cwd, false, true);
+    let response = host
+        .event(1, "tool_call", tool_call(json!({ "command": "ls" })), ctx)
+        .await;
+    assert_ne!(response["result"]["result"]["block"], true, "{response}");
+    host.finish().await.unwrap();
+}
+
+#[tokio::test]
+async fn codex_plugin_hook_stops_after_its_files_change() {
+    let env = env();
+    let root = env.paths.codex_home.join("plugins/cache/m/p/1.0.0");
+    let manifest = root.join(".codex-plugin/plugin.json");
+    std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+    std::fs::write(&manifest, r#"{"name":"p"}"#).unwrap();
+    let deny = script(&env, "deny.sh", "echo 'blocked' >&2\nexit 2");
+    write_hooks(
+        &root.join("hooks/hooks.json"),
+        "PreToolUse",
+        Some("^Bash$"),
+        &deny,
+    );
+    let config = "[plugins.\"p@m\"]\nenabled = true\n";
+    std::fs::write(env.paths.codex_home.join("config.toml"), config).unwrap();
+    let mut host = start(&env).await;
+    let ctx = hooks_ctx(&env.cwd, false, true);
+    let call = tool_call(json!({ "command": "ls" }));
+    let first = host.event(1, "tool_call", call.clone(), ctx.clone()).await;
+    assert_eq!(first["result"]["result"]["block"], true, "{first}");
+    std::fs::write(root.join("hooks/run.sh"), "echo changed").unwrap();
+    let second = host.event(2, "tool_call", call, ctx).await;
+    assert_ne!(second["result"]["result"]["block"], true, "{second}");
     host.finish().await.unwrap();
 }

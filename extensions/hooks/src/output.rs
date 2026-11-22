@@ -1,7 +1,9 @@
 use serde_json::Value;
 
+mod codex_failure;
 mod json;
 
+pub use codex_failure::codex_failure_unenforceable;
 use json::apply_json;
 pub use json::terminal_sequence_allowed;
 
@@ -85,6 +87,8 @@ pub struct Outcome {
     pub elicitation: Option<(String, Option<Value>)>,
     /// WorktreeCreate path: `worktreePath`, or the last stdout line of a command hook.
     pub worktree_path: Option<String>,
+    /// Claude and pi PreCompact plain stdout: instructions for the compaction summary.
+    pub compact_instructions: Option<String>,
     pub error: Option<String>,
 }
 
@@ -190,6 +194,10 @@ pub struct Interpret<'a> {
     pub tool: Option<&'a str>,
     pub label: &'a str,
     pub on_failure_block: bool,
+    /// Handler `type`: `command`, `http`, `mcp_tool`, `prompt`, or `agent`.
+    pub kind: &'a str,
+    /// The hook comes from a Claude Code plugin.
+    pub plugin: bool,
 }
 
 pub fn interpret(cx: &Interpret, raw: &RawRun) -> Outcome {
@@ -201,7 +209,7 @@ pub fn interpret(cx: &Interpret, raw: &RawRun) -> Outcome {
     let json = json_output(&raw.stdout);
     let stderr = raw.stderr.trim();
     let blocks = exit2_blocks(cx.source, cx.event);
-    let invalid_json = json.is_none() && looks_like_json(&raw.stdout);
+    let invalid_json = json.is_none() && looks_like_json(cx.source, &raw.stdout);
     match raw.code {
         Some(0) => match &json {
             Some(json) => apply_json(cx, json, &mut out),
@@ -214,6 +222,8 @@ pub fn interpret(cx: &Interpret, raw: &RawRun) -> Outcome {
                     out.error = Some("plain stdout is invalid here; JSON required".into());
                 } else if plain_stdout_is_context(cx.source, cx.event) {
                     out.context = Some(raw.stdout.trim().to_owned());
+                } else if !codex && cx.event == "PreCompact" {
+                    out.compact_instructions = Some(raw.stdout.trim().to_owned());
                 }
             }
             None => {}
@@ -226,7 +236,8 @@ pub fn interpret(cx: &Interpret, raw: &RawRun) -> Outcome {
         }
         Some(2)
             if !codex
-                && matches!(cx.event, "Stop" | "SubagentStop")
+                && (matches!(cx.event, "Stop" | "SubagentStop" | "TaskCompleted")
+                    || cx.plugin && cx.event == "UserPromptSubmit")
                 && raw.stdout.trim().is_empty()
                 && stderr.contains("No such file or directory") =>
         {
@@ -273,13 +284,30 @@ pub fn interpret(cx: &Interpret, raw: &RawRun) -> Outcome {
             }
         }
     }
-    let failed = raw.code != Some(0) && raw.code != Some(2) || invalid_json && raw.code == Some(0);
-    if cx.on_failure_block && !codex && failed && failure_blocks(cx.event) {
+    let failed = raw.code != Some(0) && raw.code != Some(2)
+        || invalid_json && raw.code == Some(0)
+        || cx.kind == "mcp_tool" && raw.code == Some(0) && mcp_answer_fails(&raw.stdout);
+    if cx.on_failure_block && codex {
+        codex_failure::apply_codex_failure(cx.event, &mut out);
+    } else if cx.on_failure_block && failed && failure_blocks(cx.event) {
         out.block = Some(failure_reason(cx, raw, stderr));
         out.permission = None;
         out.updated_input = None;
     }
     out
+}
+
+/// With `onFailure: "block"`, an `mcp_tool` answer fails unless it is empty, `{}`, or JSON that
+/// sets a hook output field other than `reason`.
+fn mcp_answer_fails(stdout: &str) -> bool {
+    let text = stdout.trim();
+    if text.is_empty() {
+        return false;
+    }
+    match json_output(text).as_ref().and_then(Value::as_object) {
+        Some(object) => !object.is_empty() && object.keys().all(|key| key == "reason"),
+        None => true,
+    }
 }
 
 /// The last non-empty stdout line without ANSI escapes (WorktreeCreate command hooks).
@@ -293,9 +321,12 @@ fn last_line(stdout: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Stdout that a hook meant as JSON: starts with `{` and ends with `}`.
-fn looks_like_json(stdout: &str) -> bool {
+/// Stdout that a hook meant as JSON: starts with `{` and ends with `}` (Codex: starts with `{` or `[`).
+fn looks_like_json(source: Source, stdout: &str) -> bool {
     let text = stdout.trim();
+    if source.is_codex() {
+        return text.starts_with(['{', '[']);
+    }
     text.starts_with('{') && text.ends_with('}')
 }
 

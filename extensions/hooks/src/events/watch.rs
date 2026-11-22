@@ -73,7 +73,11 @@ pub fn config_files(rt: &Runtime, cwd: &Path) -> Vec<(&'static str, PathBuf)> {
             project_path(&root, ".claude/settings.local.json"),
         ),
     ];
-    for dir in policy_dirs() {
+    let files_on = rt.lock().loaded.as_ref().is_none_or(|loaded| {
+        let key = crate::config::claude_policy::FILES_SWITCH;
+        loaded.options.switch_on(key)
+    });
+    if let Some(dir) = rt.paths.claude_policy.as_ref().filter(|_| files_on) {
         files.push(("policy_settings", dir.join("managed-settings.json")));
         files.extend(
             list_files(&dir.join("managed-settings.d"), 100)
@@ -89,16 +93,6 @@ pub fn config_files(rt: &Runtime, cwd: &Path) -> Vec<(&'static str, PathBuf)> {
         );
     }
     files
-}
-
-fn policy_dirs() -> Vec<PathBuf> {
-    if cfg!(target_os = "macos") {
-        vec![PathBuf::from("/Library/Application Support/ClaudeCode")]
-    } else if cfg!(windows) {
-        vec![PathBuf::from(r"C:\Program Files\ClaudeCode")]
-    } else {
-        vec![PathBuf::from("/etc/claude-code")]
-    }
 }
 
 fn list_files(dir: &Path, max: usize) -> Vec<PathBuf> {

@@ -10,6 +10,8 @@ fn run(source: Source, event: &str, code: i32, stdout: &str, stderr: &str) -> Ou
         tool: Some("Bash"),
         label: "check.sh",
         on_failure_block: false,
+        kind: "command",
+        plugin: false,
     };
     interpret(&cx, &RawRun::exit(code, stdout, stderr))
 }
@@ -50,6 +52,8 @@ fn exit_codes() {
         tool: Some("Bash"),
         label: "s",
         on_failure_block: true,
+        kind: "command",
+        plugin: false,
     };
     let failed = interpret(&cx, &RawRun::exit(1, "", "lint failed"));
     assert_eq!(
@@ -59,10 +63,11 @@ fn exit_codes() {
         )
     );
     let codex_fail = Interpret { source: X, ..cx };
-    assert!(
+    assert_eq!(
         interpret(&codex_fail, &RawRun::exit(1, "", "x"))
             .block
-            .is_none()
+            .as_deref(),
+        Some("PreToolUse hook failed. This hook is configured to block continuation on failure.")
     );
     let timeout = interpret(&cx, &RawRun::failed("timed out after 1s"));
     assert!(timeout.block.unwrap().contains(": timed out; blocking"));
@@ -170,8 +175,9 @@ fn permission_decisions_and_precedence() {
     );
     assert_eq!(
         fold(&[&ask, &defer, &allow]).permission.unwrap().0,
-        Permission::Defer
+        Permission::Ask
     );
+    assert_eq!(fold(&[&defer]).permission, None);
     assert_eq!(
         fold(&[&allow, &deny, &defer]).permission,
         Some((Permission::Deny, "nope".into()))
@@ -193,12 +199,14 @@ fn permission_decisions_and_precedence() {
     );
     let approve = run(C, "PreToolUse", 0, r#"{"decision":"approve"}"#, "");
     assert_eq!(approve.permission.unwrap().0, Permission::Allow);
-    let spec = |body: &str| format!(r#"{{"hookSpecificOutput":{body}}}"#);
+    let spec = |fields: &str| {
+        format!(r#"{{"hookSpecificOutput":{{"hookEventName":"PreToolUse",{fields}}}}}"#)
+    };
     let codex_ask = run(
         X,
         "PreToolUse",
         0,
-        &spec(r#"{"permissionDecision":"ask"}"#),
+        &spec(r#""permissionDecision":"ask""#),
         "",
     );
     assert!(codex_ask.permission.is_none() && codex_ask.error.is_some());
@@ -206,11 +214,11 @@ fn permission_decisions_and_precedence() {
         X,
         "PreToolUse",
         0,
-        &spec(r#"{"permissionDecision":"allow"}"#),
+        &spec(r#""permissionDecision":"allow""#),
         "",
     );
     assert!(codex_allow.permission.is_none() && codex_allow.error.is_some());
-    let rewrite = spec(r#"{"permissionDecision":"allow","updatedInput":{"command":"y"}}"#);
+    let rewrite = spec(r#""permissionDecision":"allow","updatedInput":{"command":"y"}"#);
     let codex_rewrite = run(X, "PreToolUse", 0, &rewrite, "");
     assert_eq!(
         codex_rewrite.permission, None,
@@ -221,7 +229,7 @@ fn permission_decisions_and_precedence() {
         X,
         "PreToolUse",
         0,
-        &spec(r#"{"permissionDecision":"deny"}"#),
+        &spec(r#""permissionDecision":"deny""#),
         "",
     );
     assert!(bare_deny.permission.is_none() && bare_deny.error.is_some());
@@ -233,7 +241,7 @@ fn permission_decisions_and_precedence() {
         C,
         "PreModelSwitch",
         0,
-        &spec(r#"{"permissionDecision":"deny"}"#),
+        &spec(r#""permissionDecision":"deny""#),
         "",
     );
     assert_eq!(switch.decision().map(|d| d.0), Some(Permission::Deny));
@@ -281,7 +289,7 @@ fn permission_request_decision() {
 
 #[test]
 fn post_tool_and_stop_blocks() {
-    let block = r#"{"decision":"block","reason":"fix lint","hookSpecificOutput":{"additionalContext":"ctx"}}"#;
+    let block = r#"{"decision":"block","reason":"fix lint","hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"ctx"}}"#;
     for source in [C, X] {
         let out = run(source, "PostToolUse", 0, block, "");
         assert_eq!(out.block.as_deref(), Some("fix lint"));
@@ -351,6 +359,15 @@ fn json_detection_and_universal_fields() {
     assert!(broken.context.is_none() && broken.error.is_some());
     let plain = run(C, "UserPromptSubmit", 0, "{not json", "");
     assert_eq!(plain.context.as_deref(), Some("{not json"));
+    for stdout in ["{not json", "[note] x"] {
+        let codex = run(X, "SessionStart", 0, stdout, "");
+        assert!(codex.context.is_none() && codex.error.is_some(), "{stdout}");
+    }
+    let unnamed = r#"{"hookSpecificOutput":{"decision":{"behavior":"allow"}}}"#;
+    let codex = run(X, "PermissionRequest", 0, unnamed, "");
+    assert!(codex.permission.is_none() && codex.error.is_some());
+    let claude = run(C, "PermissionRequest", 0, unnamed, "");
+    assert_eq!(claude.permission, Some((Permission::Allow, None)));
     let missing = run(C, "Stop", 2, "", "sh: x.sh: No such file or directory");
     assert!(missing.block.is_none());
     let out = run(
@@ -376,4 +393,90 @@ fn json_detection_and_universal_fields() {
         (Some("c"), Some("t"))
     );
     assert_eq!(title.initial_user_message.as_deref(), Some("go"));
+}
+
+#[test]
+fn missing_script_and_mcp_answers_under_on_failure() {
+    let missing = "/bin/sh: ./gone.sh: No such file or directory";
+    let task = run(C, "TaskCompleted", 2, "", missing);
+    assert!(task.block.is_none() && task.error.is_some());
+    let prompt = run(C, "UserPromptSubmit", 2, "", missing);
+    assert!(prompt.block.is_some());
+    let plugin = Interpret {
+        source: C,
+        event: "UserPromptSubmit",
+        tool: None,
+        label: "p",
+        on_failure_block: false,
+        kind: "command",
+        plugin: true,
+    };
+    let plugin_run = interpret(&plugin, &RawRun::exit(2, "", missing));
+    assert!(plugin_run.block.is_none());
+    let mcp = Interpret {
+        event: "PreToolUse",
+        tool: Some("Bash"),
+        on_failure_block: true,
+        kind: "mcp_tool",
+        plugin: false,
+        ..plugin
+    };
+    let blocked = |stdout: &str| {
+        interpret(&mcp, &RawRun::exit(0, stdout, ""))
+            .block
+            .is_some()
+    };
+    assert!(blocked("looks fine"));
+    assert!(blocked(r#"{"reason":"r"}"#));
+    assert!(!blocked("{}"));
+    assert!(!blocked(""));
+    assert!(!blocked(r#"{"decision":"approve"}"#));
+}
+
+#[test]
+fn post_tool_use_failure_cannot_rewrite_the_result() {
+    let out = r#"{"hookSpecificOutput":{"updatedToolOutput":"redacted"}}"#;
+    assert!(
+        run(C, "PostToolUseFailure", 0, out, "")
+            .updated_output
+            .is_none()
+    );
+    assert!(run(C, "PostToolUse", 0, out, "").updated_output.is_some());
+}
+
+#[test]
+fn pre_compact_plain_stdout_is_instructions_for_claude_and_pi() {
+    let claude = run(C, "PreCompact", 0, "keep the test names\n", "");
+    assert_eq!(
+        claude.compact_instructions.as_deref(),
+        Some("keep the test names")
+    );
+    assert_eq!(claude.context, None);
+    let pi = run(Source::Pi, "PreCompact", 0, "notes", "");
+    assert_eq!(pi.compact_instructions.as_deref(), Some("notes"));
+    assert_eq!(
+        run(X, "PreCompact", 0, "notes", "").compact_instructions,
+        None
+    );
+    assert_eq!(
+        run(C, "PreCompact", 1, "notes", "").compact_instructions,
+        None
+    );
+    assert_eq!(
+        run(C, "PreCompact", 0, "{\"decision\":\"approve\"}", "").compact_instructions,
+        None
+    );
+}
+
+#[test]
+fn codex_output_without_a_valid_event_name_shows_nothing() {
+    let unnamed = r#"{"systemMessage":"hi","hookSpecificOutput":{"additionalContext":"x"}}"#;
+    let out = run(X, "SessionStart", 0, unnamed, "");
+    assert!(out.error.as_deref().unwrap().contains("hookEventName"));
+    assert_eq!(out.system_message, None);
+    assert_eq!(out.context, None);
+    let named = r#"{"systemMessage":"hi","continue":false,"hookSpecificOutput":{"hookEventName":"PreToolUse"}}"#;
+    let out = run(X, "PreToolUse", 0, named, "");
+    assert!(out.error.is_some());
+    assert_eq!(out.system_message.as_deref(), Some("hi"));
 }

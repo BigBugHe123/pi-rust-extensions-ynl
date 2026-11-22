@@ -8,6 +8,14 @@ pub fn apply_json(cx: &Interpret, json: &Value, out: &mut Outcome) {
     let text = |value: Option<&Value>| value.and_then(Value::as_str).map(str::to_owned);
     let reason = text(json.get("reason"));
     let stop_reason = text(json.get("stopReason"));
+    let has_specific = json.get("hookSpecificOutput").is_some_and(|v| !v.is_null());
+    if codex && has_specific && !codex_named(specific) {
+        out.error = Some(format!(
+            "{} hook returned hookSpecificOutput without a valid hookEventName",
+            cx.event
+        ));
+        return;
+    }
     out.system_message = text(json.get("systemMessage"));
     out.terminal_sequence = text(json.get("terminalSequence"));
     if codex && let Some(error) = codex_invalid(cx.event, json, specific) {
@@ -85,7 +93,7 @@ pub fn apply_json(cx: &Interpret, json: &Value, out: &mut Outcome) {
         }
         "PostToolUse" | "PostToolUseFailure" => {
             out.block = block;
-            if !codex {
+            if !codex && cx.event == "PostToolUse" {
                 out.updated_output = get("updatedToolOutput")
                     .or_else(|| get("updatedMCPToolOutput"))
                     .cloned();
@@ -135,6 +143,29 @@ fn string_list(value: Option<&Value>) -> Option<Vec<String>> {
             .map(str::to_owned)
             .collect(),
     )
+}
+
+/// The Codex `HookEventNameWire` values; Codex does not parse another `hookEventName`.
+const CODEX_EVENT_NAMES: &[&str] = &[
+    "PreToolUse",
+    "PermissionRequest",
+    "PostToolUse",
+    "PreCompact",
+    "PostCompact",
+    "SessionStart",
+    "UserPromptSubmit",
+    "SubagentStart",
+    "SubagentStop",
+    "Stop",
+    "Interrupt",
+];
+
+/// Codex does not parse `hookSpecificOutput` without a known `hookEventName`.
+fn codex_named(specific: Option<&Value>) -> bool {
+    specific
+        .and_then(|s| s.get("hookEventName"))
+        .and_then(Value::as_str)
+        .is_some_and(|name| CODEX_EVENT_NAMES.contains(&name))
 }
 
 /// Codex parses these outputs but marks the run failed and ignores its decision.

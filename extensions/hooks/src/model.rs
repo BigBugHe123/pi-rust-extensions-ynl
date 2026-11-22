@@ -49,6 +49,36 @@ impl Scope {
     }
 }
 
+/// How specific a hook's file is, least specific first. Organization policy is `Managed`: never
+/// disabled, outside the `override` order, and trusted by policy unless `HookDef::user_writable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Layer {
+    Global,
+    /// Depth below the project root: Codex loads each `.codex` dir from the root down to the cwd.
+    Project(usize),
+    /// `.claude/settings.local.json`.
+    Local,
+    Managed,
+}
+
+impl Layer {
+    pub fn name(self) -> &'static str {
+        match self {
+            Layer::Global => "global",
+            Layer::Project(_) => "project",
+            Layer::Local => "local",
+            Layer::Managed => "managed",
+        }
+    }
+
+    pub fn of(scope: Scope) -> Self {
+        match scope {
+            Scope::Global => Layer::Global,
+            Scope::Project => Layer::Project(0),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Plugin {
     pub id: Option<String>,
@@ -62,15 +92,21 @@ pub struct Plugin {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HookDef {
     pub source: Source,
+    /// The pi options file that holds this hook's `disabled` entry.
     pub scope: Scope,
+    pub layer: Layer,
     pub file: PathBuf,
     pub event: String,
     pub matcher: Option<String>,
     pub handler: Value,
     pub plugin: Option<Plugin>,
     pub hash: String,
+    /// The hash without the plugin fingerprint of a Codex plugin hook, for `disabled` lists.
+    pub stable_hash: Option<String>,
     /// Matcher group and handler index in the file, for Codex `[hooks.state]` keys.
     pub position: (usize, usize),
+    /// A managed hook from a source the user can write: the server-managed copy or HKCU.
+    pub user_writable: bool,
 }
 
 impl HookDef {
@@ -86,14 +122,37 @@ impl HookDef {
         Self {
             source,
             scope,
+            layer: Layer::of(scope),
             file,
             event: event.to_owned(),
             matcher,
             handler,
             plugin: None,
             hash,
+            stable_hash: None,
             position: (0, 0),
+            user_writable: false,
         }
+    }
+
+    /// Runs without a trust prompt because organization policy deployed it.
+    pub fn trusted_by_policy(&self) -> bool {
+        self.layer == Layer::Managed && !self.user_writable
+    }
+
+    /// A hook that the Codex plugin loader made; only it sets `stable_hash`.
+    pub fn is_codex_plugin(&self) -> bool {
+        self.source.is_codex() && self.stable_hash.is_some()
+    }
+
+    /// The key pi writes to a `disabled` list. It stays the same when plugin files change.
+    pub fn disabled_key(&self) -> &str {
+        self.stable_hash.as_deref().unwrap_or(&self.hash)
+    }
+
+    /// The keys that disable this hook: `disabled_key` and the full hash of older entries.
+    pub fn disabled_keys(&self) -> [&str; 2] {
+        [self.disabled_key(), &self.hash]
     }
 
     pub fn str_field(&self, key: &str) -> Option<&str> {
@@ -111,7 +170,11 @@ impl HookDef {
         self.str_field("type").unwrap_or("command")
     }
 
+    /// Codex reads `async` on `command` hooks only and has no `asyncRewake`.
     pub fn is_async(&self) -> bool {
+        if self.source.is_codex() {
+            return self.kind() == "command" && self.bool_field("async");
+        }
         self.bool_field("async") || self.bool_field("asyncRewake")
     }
 
@@ -135,6 +198,7 @@ impl HookDef {
             {
                 30.0
             }
+            _ if !codex && self.event == "MessageDisplay" => 10.0,
             _ => 600.0,
         };
         let mut secs = self
@@ -143,6 +207,9 @@ impl HookDef {
             .and_then(Value::as_f64)
             .filter(|s| *s > 0.0)
             .map(|s| s.min(MAX_TIMEOUT_SECS));
+        if !codex {
+            secs = secs.map(|s| s.max(1.0));
+        }
         if codex_short {
             secs = secs.map(|s| s.min(3.0));
         } else if claude_end {
@@ -220,7 +287,7 @@ impl HookDef {
     }
 
     pub fn label(&self) -> String {
-        let mut label = format!("{}/{}", self.source.name(), self.scope.name());
+        let mut label = format!("{}/{}", self.source.name(), self.layer.name());
         if let Some(id) = self.plugin.as_ref().and_then(|p| p.id.as_deref()) {
             label.push_str(&format!(" plugin {id}"));
         }
@@ -316,6 +383,20 @@ mod tests {
     }
 
     #[test]
+    fn codex_runs_only_async_commands_in_the_background() {
+        let def = |source, handler| {
+            HookDef::new(source, Scope::Global, "/f".into(), "Stop", None, handler)
+        };
+        let mcp = json!({ "type": "mcp_tool", "server": "s", "tool": "t", "async": true });
+        let rewake = json!({ "command": "x", "asyncRewake": true });
+        assert!(def(Source::Codex, json!({ "command": "x", "async": true })).is_async());
+        assert!(!def(Source::Codex, mcp.clone()).is_async());
+        assert!(!def(Source::Codex, rewake.clone()).is_async());
+        assert!(def(Source::Claude, mcp).is_async());
+        assert!(def(Source::Claude, rewake).is_async());
+    }
+
+    #[test]
     fn huge_timeouts_are_clamped() {
         for timeout in [json!(1e300), json!(f64::MAX)] {
             let handler = json!({ "command": "x", "timeout": timeout });
@@ -367,5 +448,15 @@ mod tests {
         assert_eq!(def(Source::Claude, "Stop", bg).timeout().as_secs(), 86_400);
         let prompt = json!({ "type": "prompt", "prompt": "p" });
         assert_eq!(def(Source::Pi, "Stop", prompt).timeout().as_secs(), 30);
+        let display = def(Source::Claude, "MessageDisplay", json!({ "command": "x" }));
+        assert_eq!(display.timeout().as_secs(), 10);
+        let short = json!({ "command": "x", "timeout": 0.2 });
+        assert_eq!(
+            def(Source::Claude, "Stop", short.clone())
+                .timeout()
+                .as_secs(),
+            1
+        );
+        assert_eq!(def(Source::Codex, "Stop", short).timeout().as_millis(), 200);
     }
 }
