@@ -68,6 +68,7 @@ fn load_at(file: &Path, now: i64) -> CloudSources {
     }
     for (file, doc) in fragments("requirements_toml") {
         let mut requirements = stricter_only(Requirements::from_doc(file, &doc));
+        requirements.cloud = true;
         if let Some(hooks) = requirements.hooks.take() {
             let hooks = vec![(requirements.file.clone(), hooks)];
             sources.configs.push(CodexLayer {

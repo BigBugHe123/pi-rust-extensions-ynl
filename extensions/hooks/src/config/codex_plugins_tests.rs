@@ -18,7 +18,8 @@ fn hooks(command: &str) -> Value {
 fn install(home: &Path, id: &str, version: &str) -> PathBuf {
     let (name, market) = id.rsplit_once('@').unwrap();
     let root = home
-        .join("plugins/cache")
+        .join("plugins")
+        .join("cache")
         .join(market)
         .join(name)
         .join(version);
@@ -47,7 +48,8 @@ fn enabled_plugins_load_their_default_hooks_file() {
     assert_eq!(commands(&defs), ["codex/global plugin fmt@acme:fmt"]);
     let plugin = defs[0].plugin.as_ref().unwrap();
     assert_eq!(plugin.root.as_deref(), Some(&*root.display().to_string()));
-    let data = home.join("plugins/data/fmt-acme").display().to_string();
+    let data = home.join("plugins").join("data").join("fmt-acme");
+    let data = data.display().to_string();
     assert_eq!(plugin.data.as_deref(), Some(&*data));
     assert_eq!(defs[0].scope, Scope::Global);
     let features = json!({ "features": { "plugins": false } });
@@ -107,6 +109,24 @@ fn hook_state_keys_and_bundle_changes() {
     );
     let states = HashMap::from([("p@m:hooks/hooks.json:stop:0:0".to_owned(), false)]);
     assert!(load(home, &[&user], None, &states).is_empty());
+}
+
+#[test]
+fn the_disabled_key_survives_plugin_updates() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let user = json!({ "plugins": { "p@m": {} } });
+    let old = install(home, "p@m", "1.0.0");
+    write(&old.join(".codex-plugin/plugin.json"), r#"{"name":"p"}"#);
+    write(&old.join("hooks/hooks.json"), &hooks("x").to_string());
+    let first = load(home, &[&user], None, &HashMap::new());
+    let new = install(home, "p@m", "1.0.1");
+    write(&new.join(".codex-plugin/plugin.json"), r#"{"name":"p"}"#);
+    write(&new.join("hooks/hooks.json"), &hooks("y").to_string());
+    let second = load(home, &[&user], None, &HashMap::new());
+    assert!(second[0].file.starts_with(&new));
+    assert_ne!(first[0].hash, second[0].hash);
+    assert_eq!(first[0].disabled_key(), second[0].disabled_key());
 }
 
 #[test]

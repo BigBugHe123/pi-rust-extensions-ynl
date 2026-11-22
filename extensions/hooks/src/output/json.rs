@@ -8,6 +8,14 @@ pub fn apply_json(cx: &Interpret, json: &Value, out: &mut Outcome) {
     let text = |value: Option<&Value>| value.and_then(Value::as_str).map(str::to_owned);
     let reason = text(json.get("reason"));
     let stop_reason = text(json.get("stopReason"));
+    let has_specific = json.get("hookSpecificOutput").is_some_and(|v| !v.is_null());
+    if codex && has_specific && !codex_named(specific) {
+        out.error = Some(format!(
+            "{} hook returned hookSpecificOutput without a valid hookEventName",
+            cx.event
+        ));
+        return;
+    }
     out.system_message = text(json.get("systemMessage"));
     out.terminal_sequence = text(json.get("terminalSequence"));
     if codex && let Some(error) = codex_invalid(cx.event, json, specific) {
@@ -152,6 +160,14 @@ const CODEX_EVENT_NAMES: &[&str] = &[
     "Interrupt",
 ];
 
+/// Codex does not parse `hookSpecificOutput` without a known `hookEventName`.
+fn codex_named(specific: Option<&Value>) -> bool {
+    specific
+        .and_then(|s| s.get("hookEventName"))
+        .and_then(Value::as_str)
+        .is_some_and(|name| CODEX_EVENT_NAMES.contains(&name))
+}
+
 /// Codex parses these outputs but marks the run failed and ignores its decision.
 fn codex_invalid(event: &str, json: &Value, specific: Option<&Value>) -> Option<String> {
     let has = |key: &str| json.get(key).is_some_and(|v| !v.is_null());
@@ -159,14 +175,6 @@ fn codex_invalid(event: &str, json: &Value, specific: Option<&Value>) -> Option<
     let stops = json.get("continue") == Some(&Value::Bool(false));
     let suppress = json.get("suppressOutput") == Some(&Value::Bool(true));
     let unsupported = |what: &str| Some(format!("{event} hook returned unsupported {what}"));
-    let named = spec("hookEventName")
-        .and_then(Value::as_str)
-        .is_some_and(|name| CODEX_EVENT_NAMES.contains(&name));
-    if has("hookSpecificOutput") && !named {
-        return Some(format!(
-            "{event} hook returned hookSpecificOutput without a valid hookEventName"
-        ));
-    }
     match event {
         "PreToolUse" | "PermissionRequest" if stops => unsupported("continue:false"),
         "PreToolUse" | "PermissionRequest" if has("stopReason") => unsupported("stopReason"),

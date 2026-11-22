@@ -140,6 +140,11 @@ impl HookDef {
         self.layer == Layer::Managed && !self.user_writable
     }
 
+    /// A hook that the Codex plugin loader made; only it sets `stable_hash`.
+    pub fn is_codex_plugin(&self) -> bool {
+        self.source.is_codex() && self.stable_hash.is_some()
+    }
+
     /// The key pi writes to a `disabled` list. It stays the same when plugin files change.
     pub fn disabled_key(&self) -> &str {
         self.stable_hash.as_deref().unwrap_or(&self.hash)

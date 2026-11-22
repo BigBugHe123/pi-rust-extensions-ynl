@@ -241,6 +241,35 @@ fn server_cache_hooks_load_as_managed() {
 }
 
 #[test]
+fn the_server_copy_keeps_the_locks_of_the_sources_it_outranks() {
+    let fx = fixture(no_registry);
+    fx.remote(json!({ "model": "x" }));
+    fx.files(json!({
+        "allowManagedHooksOnly": true,
+        "allowedHttpHookUrls": ["https://hooks.corp/*"],
+        "hooks": hooks("file"),
+    }));
+    fx.write("claude/settings.json", &json!({ "hooks": hooks("user") }));
+    let docs = claude_policy_docs(&fx.paths, &Options::default());
+    let expected = [PolicySource::Files, PolicySource::Remote];
+    assert_eq!(sources_of(&docs), expected);
+    assert_eq!(lock(&docs, "allowManagedHooksOnly"), Some(true));
+    let loaded = load(&fx);
+    assert!(loaded.hooks.is_empty());
+    assert_eq!(
+        loaded.http.urls,
+        Some(vec!["https://hooks.corp/*".to_string()])
+    );
+    fx.remote(json!({ "managedSourcesBehavior": "first-wins", "allowManagedHooksOnly": false }));
+    let docs = claude_policy_docs(&fx.paths, &Options::default());
+    assert_eq!(lock(&docs, "allowManagedHooksOnly"), Some(true));
+    fx.remote(json!({ "hooks": hooks("remote") }));
+    fx.files(json!({ "allowManagedHooksOnly": false }));
+    let docs = claude_policy_docs(&fx.paths, &Options::default());
+    assert_eq!(lock(&docs, "allowManagedHooksOnly"), None);
+}
+
+#[test]
 fn merge_turns_hooks_off_when_any_source_disables_them() {
     let fx = fixture(no_registry);
     fx.remote(json!({

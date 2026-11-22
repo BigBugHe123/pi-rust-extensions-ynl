@@ -88,7 +88,7 @@ pub fn bundle_unchanged(
     fingerprints: &mut HashMap<PathBuf, Option<String>>,
 ) -> bool {
     let root = def.plugin.as_ref().and_then(|p| p.root.as_deref());
-    let Some(root) = root.filter(|_| def.source.is_codex()) else {
+    let Some(root) = root.filter(|_| def.is_codex_plugin()) else {
         return true;
     };
     let current = fingerprints

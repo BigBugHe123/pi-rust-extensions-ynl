@@ -179,7 +179,7 @@ fn cloud_requirements_apply_only_when_stricter() {
         summaries(&paths, base, &[])
     };
     assert_eq!(run("allow_managed_hooks_only = true\n"), ["sys:managed"]);
-    assert!(run("[features]\nhooks = false\n").is_empty());
+    assert_eq!(run("[features]\nhooks = false\n"), ["sys:managed"]);
     assert_eq!(
         run(&stop_hook("cloudreq")),
         [

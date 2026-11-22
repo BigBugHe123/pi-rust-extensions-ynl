@@ -39,6 +39,9 @@ pub struct PolicyDoc {
     pub source: PolicySource,
     pub path: PathBuf,
     pub doc: Value,
+    /// An admin doc that the server-managed copy outranks under `first-wins`. pi does not check
+    /// the copy's signature, so this doc keeps its locks, HTTP allowlists, and `enabledPlugins`.
+    pub displaced: bool,
 }
 
 struct Found {
@@ -150,24 +153,28 @@ fn select(found: Vec<Found>) -> Vec<PolicyDoc> {
         == Some("merge");
     let admin_present = admin.iter().any(Found::present);
     let mut chosen: Vec<Found> = admin.into_iter().filter(Found::delivers_policy).collect();
-    if !merge {
-        chosen.truncate(1);
+    let mut displaced = Vec::new();
+    if !merge && !chosen.is_empty() {
+        let rest = chosen.split_off(1);
+        if chosen[0].source.user_writable() {
+            displaced = rest;
+        }
     }
     if !admin_present {
         chosen.extend(user.into_iter().filter(Found::delivers_policy));
     }
-    chosen
-        .into_iter()
-        .rev()
-        .flat_map(|found| {
+    let docs = |found: Vec<Found>, displaced: bool| {
+        found.into_iter().rev().flat_map(move |found| {
             let source = found.source;
             found.docs.into_iter().map(move |(path, doc)| PolicyDoc {
                 source,
                 path,
                 doc: normalize(doc),
+                displaced,
             })
         })
-        .collect()
+    };
+    docs(displaced, true).chain(docs(chosen, false)).collect()
 }
 
 /// Claude Code's fallbacks for invalid managed hook keys. An invalid `disableAllHooks` is
@@ -219,21 +226,26 @@ pub fn enabled_plugins(docs: &[PolicyDoc]) -> BTreeMap<String, bool> {
 }
 
 /// A lock such as `allowManagedHooksOnly` or `disableAllHooks`: `true` when the value in force in
-/// any source is `true`, else the value in force in the highest source.
+/// any source is `true`, else the value in force in the highest selected source.
 pub fn lock(docs: &[PolicyDoc], key: &str) -> Option<bool> {
-    let values: Vec<Option<bool>> = docs
+    let values: Vec<(bool, Option<bool>)> = docs
         .chunk_by(|a, b| a.source == b.source)
         .map(|group| {
-            group
+            let value = group
                 .iter()
                 .rev()
-                .find_map(|doc| doc.doc.get(key)?.as_bool())
+                .find_map(|doc| doc.doc.get(key)?.as_bool());
+            (group[0].displaced, value)
         })
         .collect();
-    if values.contains(&Some(true)) {
+    if values.iter().any(|(_, value)| *value == Some(true)) {
         Some(true)
     } else {
-        values.last().copied().flatten()
+        values
+            .iter()
+            .rev()
+            .find(|(displaced, _)| !displaced)
+            .and_then(|(_, value)| *value)
     }
 }
 

@@ -12,7 +12,7 @@ use super::codex_bundled::is_codex_bundled;
 use super::codex_plugin_bundle::{active_version, bundle_trust_hash, fingerprint};
 use super::options::read_json;
 use super::parse_hooks;
-use crate::model::{HookDef, Layer, Plugin, Scope, Source};
+use crate::model::{HookDef, Layer, Plugin, Scope, Source, trust_hash};
 
 const LEGACY_MANIFESTS: [&str; 3] = [
     ".codex-plugin/plugin.json",
@@ -33,13 +33,14 @@ pub fn load(
     if on == Some(false) {
         return Vec::new();
     }
+    let home: PathBuf = codex_home.components().collect();
     let mut defs = Vec::new();
     for id in enabled_plugins(configs) {
         let Some((name, market)) = parse_id(&id) else {
             pi_ext_sdk::warn!("hooks: ignoring invalid Codex plugin key {id}");
             continue;
         };
-        let base = codex_home.join("plugins/cache").join(market).join(name);
+        let base = home.join("plugins").join("cache").join(market).join(name);
         let Some(version) = active_version(&base) else {
             continue;
         };
@@ -49,9 +50,10 @@ pub fn load(
             for def in parse_hooks(Source::Codex, Scope::Global, &file, &hooks) {
                 let file_key = def.file.display().to_string();
                 let suffix = &def.codex_state_key()[file_key.len()..];
-                let off = states.get(&format!("{id}:{key_source}{suffix}")) == Some(&false);
+                let state_key = format!("{id}:{key_source}{suffix}");
+                let off = states.get(&state_key) == Some(&false);
                 if !off && !codex_only(&id, &def) {
-                    plugin_defs.push(def);
+                    plugin_defs.push((def, state_key));
                 }
             }
         }
@@ -65,8 +67,9 @@ pub fn load(
                 continue;
             }
         };
-        let data = codex_home
-            .join("plugins/data")
+        let data = home
+            .join("plugins")
+            .join("data")
             .join(format!("{name}-{market}"));
         let plugin = Plugin {
             id: Some(id.clone()),
@@ -74,9 +77,10 @@ pub fn load(
             data: Some(data.display().to_string()),
             env: Vec::new(),
         };
-        for mut def in plugin_defs {
-            let trust = bundle_trust_hash(&def, &fingerprint);
-            def.stable_hash = Some(std::mem::replace(&mut def.hash, trust));
+        for (mut def, state_key) in plugin_defs {
+            def.hash = bundle_trust_hash(&def, &fingerprint);
+            // The Codex state key stays the same across plugin versions and handler edits.
+            def.stable_hash = Some(trust_hash(&state_key, "", None, &Value::Null));
             def.layer = Layer::Global;
             def.plugin = Some(plugin.clone());
             defs.push(def);
@@ -140,7 +144,7 @@ fn hook_sources(root: &Path) -> Vec<HookSource> {
         return Vec::new();
     };
     let default = || {
-        hook_file(root, &root.join("hooks/hooks.json"))
+        hook_file(root, &root.join("hooks").join("hooks.json"))
             .into_iter()
             .collect()
     };

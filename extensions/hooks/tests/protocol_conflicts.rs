@@ -134,6 +134,32 @@ async fn override_falls_back_when_the_specific_hook_cannot_run() {
 }
 
 #[tokio::test]
+async fn override_keeps_a_spent_once_hook_in_front_of_lower_layers() {
+    let env = env();
+    let deny = script(&env, "global", DENY);
+    let once = script(&env, "project", "true");
+    let global = json!({ "conflicts": "override", "hooks": bash_hooks(command(&deny)) });
+    options(&env, global);
+    let mut handler = command(&once);
+    handler["once"] = json!(true);
+    let project = env.cwd.join(".pi/ext/hooks.json");
+    write_json(&project, json!({ "hooks": bash_hooks(handler) }));
+    let mut host = TestHost::start(extension(env.paths.clone()));
+    host.initialize().await;
+    for id in [1, 2] {
+        let event = json!({ "type": "tool_call", "toolCallId": format!("t{id}"),
+            "toolName": "bash", "input": { "command": "ls" } });
+        let response = host
+            .event(id, "tool_call", event, hooks_ctx(&env.cwd, false, true))
+            .await;
+        assert_ne!(response["result"]["result"]["block"], true, "{response}");
+    }
+    host.finish().await.unwrap();
+    assert!(ran(&env, "project"));
+    assert!(!ran(&env, "global"));
+}
+
+#[tokio::test]
 async fn project_options_cannot_choose_override() {
     let env = env();
     global_deny_project_allow(&env);

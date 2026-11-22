@@ -467,3 +467,16 @@ fn pre_compact_plain_stdout_is_instructions_for_claude_and_pi() {
         None
     );
 }
+
+#[test]
+fn codex_output_without_a_valid_event_name_shows_nothing() {
+    let unnamed = r#"{"systemMessage":"hi","hookSpecificOutput":{"additionalContext":"x"}}"#;
+    let out = run(X, "SessionStart", 0, unnamed, "");
+    assert!(out.error.as_deref().unwrap().contains("hookEventName"));
+    assert_eq!(out.system_message, None);
+    assert_eq!(out.context, None);
+    let named = r#"{"systemMessage":"hi","continue":false,"hookSpecificOutput":{"hookEventName":"PreToolUse"}}"#;
+    let out = run(X, "PreToolUse", 0, named, "");
+    assert!(out.error.is_some());
+    assert_eq!(out.system_message.as_deref(), Some("hi"));
+}

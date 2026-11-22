@@ -37,6 +37,8 @@ pub struct Requirements {
     pub plugins: Option<bool>,
     /// `allow_managed_hooks_only`: only managed hooks run.
     pub managed_only: Option<bool>,
+    /// A cloud fragment, which any local process can sign.
+    pub cloud: bool,
 }
 
 impl Requirements {
@@ -46,6 +48,7 @@ impl Requirements {
             feature: feature(doc, "hooks").or_else(|| feature(doc, "codex_hooks")),
             plugins: feature(doc, "plugins"),
             managed_only: doc.get("allow_managed_hooks_only").and_then(Value::as_bool),
+            cloud: false,
             file,
         }
     }

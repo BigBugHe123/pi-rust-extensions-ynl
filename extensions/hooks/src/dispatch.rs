@@ -401,7 +401,8 @@ fn spawn_async(rt: Arc<Runtime>, cx: Arc<Context>, def: HookDef, input: String) 
         let rewake = [raw.stderr.trim(), raw.stdout.trim()]
             .into_iter()
             .find(|t| !t.is_empty());
-        if def.bool_field("asyncRewake")
+        if !def.source.is_codex()
+            && def.bool_field("asyncRewake")
             && raw.code == Some(2)
             && let Some(text) = rewake
         {

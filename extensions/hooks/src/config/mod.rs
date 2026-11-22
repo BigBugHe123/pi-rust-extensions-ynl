@@ -78,9 +78,11 @@ pub fn load(input: &LoadInput) -> Loaded {
     loaded.options = Options::merge(&layers);
     loaded.options.switches = options::read_switches(&global_doc, options::SWITCHES);
     let options = loaded.options.clone();
+    // A project file can come from the repository, so only the global file turns off managed hooks.
+    let managed_on = Options::merge(&[&global_doc]);
     let policy = claude_policy::claude_policy_docs(input.paths, &options);
-    let off = if options.claude {
-        load_claude(input, &options, &policy, &mut loaded)
+    let off = if options.claude || managed_on.claude {
+        load_claude(input, &options, managed_on.claude, &policy, &mut loaded)
     } else {
         loaded.http = HttpPolicy::merge(policy.iter().map(|policy| &policy.doc));
         claude_hooks_off(&policy, std::iter::empty())
@@ -90,8 +92,8 @@ pub fn load(input: &LoadInput) -> Loaded {
         off,
         forced: options.switch_on("managed/forceEnabledPlugins"),
     };
-    if options.codex {
-        load_codex(input, &options, &mut loaded);
+    if options.codex || managed_on.codex {
+        load_codex(input, &options, managed_on.codex, &mut loaded);
     }
     if options.pi {
         let docs = [
@@ -179,6 +181,7 @@ impl PluginGate {
 fn load_claude(
     input: &LoadInput,
     options: &Options,
+    managed_on: bool,
     policy: &[PolicyDoc],
     loaded: &mut Loaded,
 ) -> HooksOff {
@@ -202,7 +205,7 @@ fn load_claude(
     }
     let docs: Vec<(Layer, PathBuf, Value)> = files
         .into_iter()
-        .filter(|(layer, _)| *layer != Layer::Global || scoped(Scope::Global))
+        .filter(|_| options.claude)
         .filter_map(|(layer, path)| read_json(&path).map(|doc| (layer, path, doc)))
         .collect();
     let user_docs = || docs.iter().map(|(_, _, doc)| doc);
@@ -218,8 +221,8 @@ fn load_claude(
         ),
         HooksOff::None => {}
     }
-    if off != HooksOff::All {
-        for policy in policy {
+    if off != HooksOff::All && managed_on {
+        for policy in policy.iter().filter(|policy| !policy.displaced) {
             if let Some(hooks) = policy.doc.get("hooks") {
                 let defs = parse_hooks(Source::Claude, Scope::Global, &policy.path, hooks);
                 let mut defs = with_layer(defs, Layer::Managed);
@@ -230,8 +233,12 @@ fn load_claude(
             }
         }
     }
-    if off == HooksOff::None {
-        for (layer, path, doc) in &docs {
+    if off == HooksOff::None && options.claude {
+        // The user file sets policy keys in every `scope`; only its hooks follow `scope`.
+        let docs = docs
+            .iter()
+            .filter(|(layer, _, _)| *layer != Layer::Global || scoped(Scope::Global));
+        for (layer, path, doc) in docs {
             if let Some(hooks) = doc.get("hooks") {
                 let scope = if *layer == Layer::Global {
                     Scope::Global
@@ -248,7 +255,7 @@ fn load_claude(
 
 /// Codex managed layers (system dir, legacy file, MDM, requirements), cloud, user, project,
 /// and plugin layers. Each managed method, the cloud cache, and plugin loading have a switch.
-fn load_codex(input: &LoadInput, options: &Options, loaded: &mut Loaded) {
+fn load_codex(input: &LoadInput, options: &Options, managed_on: bool, loaded: &mut Loaded) {
     let scoped = |scope: Scope| options.scope.allows(scope);
     let mut sources = codex_managed::ManagedSources::load(input.paths, options);
     let mut layers: Vec<(Scope, Layer, codex::CodexLayer)> = Vec::new();
@@ -285,14 +292,24 @@ fn load_codex(input: &LoadInput, options: &Options, loaded: &mut Loaded) {
     for layer in std::mem::take(&mut sources.top_configs) {
         layers.push((Scope::Global, Layer::Managed, layer));
     }
-    let pinned = sources.pin(|r| r.feature);
-    let feature = pinned.or_else(|| layers.iter().rev().find_map(|(_, _, l)| l.feature));
-    if feature == Some(false) {
+    let pinned = sources
+        .requirements
+        .iter()
+        .rev()
+        .find(|r| r.feature.is_some());
+    let feature = pinned
+        .and_then(|r| r.feature)
+        .or_else(|| layers.iter().rev().find_map(|(_, _, l)| l.feature));
+    let cloud_off = feature == Some(false) && pinned.is_some_and(|r| r.cloud);
+    if feature == Some(false) && !cloud_off {
         pi_ext_sdk::info!("hooks: Codex [features] hooks = false; Codex hooks are off");
         return;
     }
-    let managed_only = sources.pin(|r| r.managed_only) == Some(true);
-    for req in sources.requirements.iter().rev() {
+    if cloud_off {
+        pi_ext_sdk::info!("hooks: cloud [features] hooks = false; only managed Codex hooks run");
+    }
+    let managed_only = cloud_off || sources.pin(|r| r.managed_only) == Some(true);
+    for req in sources.requirements.iter().rev().filter(|_| managed_on) {
         if let Some(hooks) = &req.hooks {
             let defs = parse_hooks(Source::Codex, Scope::Global, &req.file, hooks);
             loaded.hooks.extend(with_layer(defs, Layer::Managed));
@@ -304,6 +321,7 @@ fn load_codex(input: &LoadInput, options: &Options, loaded: &mut Loaded) {
         .filter_map(|(_, _, l)| l.config.as_ref())
         .collect();
     let plugins = (!managed_only
+        && options.codex
         && scoped(Scope::Global)
         && options.switch_on(options::CODEX_PLUGINS))
     .then(|| {
@@ -311,7 +329,12 @@ fn load_codex(input: &LoadInput, options: &Options, loaded: &mut Loaded) {
         codex_plugins::load(&input.paths.codex_home, &configs, pinned, &states)
     });
     for (scope, layer, codex_layer) in layers {
-        if managed_only && layer != Layer::Managed {
+        let on = if layer == Layer::Managed {
+            managed_on
+        } else {
+            options.codex && !managed_only
+        };
+        if !on {
             continue;
         }
         for (path, hooks) in codex_layer.hooks {

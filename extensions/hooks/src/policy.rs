@@ -180,10 +180,13 @@ pub async fn runnable(
         if !may_run(rt, host, def, &mut fingerprints).await {
             continue;
         }
-        handlers.insert(handler);
         if ordered {
             winners.entry(key).or_insert(def.layer);
         }
+        if spent_once(rt, def) {
+            continue;
+        }
+        handlers.insert(handler);
         keep[i] = true;
     }
     let mut kept: Vec<HookDef> = selected
@@ -204,11 +207,12 @@ async fn may_run(
     if !bundle_unchanged(def, fingerprints) {
         return false;
     }
-    if !def.trusted_by_policy() && !rt.resolve_trust(host, def).await {
-        return false;
-    }
-    let once = def.source == Source::Pi && def.bool_field("once");
-    !(once && rt.lock().ran_once.contains(&def.hash))
+    def.trusted_by_policy() || rt.resolve_trust(host, def).await
+}
+
+/// A pi `once` hook that already ran. Under `override` its layer still shadows lower layers.
+fn spent_once(rt: &Runtime, def: &HookDef) -> bool {
+    def.source == Source::Pi && def.bool_field("once") && rt.lock().ran_once.contains(&def.hash)
 }
 
 /// Under `warn`: a notice when tool hooks return different decisions or several rewrite the input.

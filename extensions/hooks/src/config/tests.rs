@@ -351,6 +351,46 @@ fn managed_plugin_gates_apply_with_the_claude_source_off() {
 }
 
 #[test]
+fn a_project_options_file_cannot_turn_off_managed_hooks() {
+    let (f, policy) = with_policy();
+    let system = f.cwd.parent().unwrap().join("etc-codex");
+    let paths = Paths {
+        codex_system: Some(system.clone()),
+        ..f.paths.clone()
+    };
+    let f = Fixture { paths, ..f };
+    write(&policy.join("managed-settings.json"), &hooks_json("cm"));
+    write(&system.join("hooks.json"), &hooks_json("xm"));
+    write(&f.paths.claude_dir.join("settings.json"), &hooks_json("cg"));
+    write(&f.paths.codex_home.join("hooks.json"), &hooks_json("xg"));
+    let off = r#"{"sources":{"claude":false,"codex":false}}"#;
+    write(&f.cwd.join(".pi/ext/hooks.json"), off);
+    let mut managed = commands(&load_with(&f, true));
+    managed.sort();
+    assert_eq!(managed, ["claude/managed:cm", "codex/managed:xm"]);
+    write(&f.agent.join("ext/hooks.json"), off);
+    assert!(commands(&load_with(&f, true)).is_empty());
+}
+
+#[test]
+fn user_policy_keys_apply_in_every_scope() {
+    let f = fixture();
+    let user = json!({
+        "disableAllHooks": true,
+        "allowedHttpHookUrls": ["https://user.example.com/*"],
+    });
+    write(&f.paths.claude_dir.join("settings.json"), &user.to_string());
+    write(&f.cwd.join(".claude/settings.json"), &hooks_json("cp"));
+    write(&f.cwd.join(".pi/ext/hooks.json"), r#"{"scope":"project"}"#);
+    let loaded = load_with(&f, true);
+    assert!(commands(&loaded).is_empty());
+    assert_eq!(
+        loaded.http.urls,
+        Some(vec!["https://user.example.com/*".to_owned()])
+    );
+}
+
+#[test]
 fn managed_http_allowlists_apply_with_the_claude_source_off() {
     let (f, policy) = with_policy();
     write(
