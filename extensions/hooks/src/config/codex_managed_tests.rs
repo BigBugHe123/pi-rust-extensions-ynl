@@ -180,6 +180,20 @@ fn cloud_requirements_apply_only_when_stricter() {
     };
     assert_eq!(run("allow_managed_hooks_only = true\n"), ["sys:managed"]);
     assert_eq!(run("[features]\nhooks = false\n"), ["sys:managed"]);
+    write(
+        &base.join("etc/requirements.toml"),
+        "[features]\nhooks = false\n",
+    );
+    assert!(run("[features]\nhooks = false\n").is_empty());
+    std::fs::remove_file(base.join("etc/requirements.toml")).unwrap();
+    write(
+        &paths.codex_home.join("config.toml"),
+        "[features]\nhooks = false\n",
+    );
+    assert!(run("[features]\nhooks = false\n").is_empty());
+    write(&paths.codex_home.join("config.toml"), &stop_hook("user"));
+    write_cache(&paths.codex_home, "[features]\nhooks = false\n", "");
+    assert_eq!(summaries(&paths, base, &[]), ["sys:managed"]);
     assert_eq!(
         run(&stop_hook("cloudreq")),
         [

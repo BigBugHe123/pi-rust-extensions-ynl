@@ -264,9 +264,11 @@ fn load_codex(input: &LoadInput, options: &Options, managed_on: bool, loaded: &m
     {
         layers.push((Scope::Global, Layer::Managed, codex::load_layer(system)));
     }
+    let mut cloud_layers = layers.len()..layers.len();
     if scoped(Scope::Global) {
         let cloud = std::mem::take(&mut sources.cloud_configs);
         layers.extend(cloud.into_iter().map(|l| (Scope::Global, Layer::Global, l)));
+        cloud_layers.end = layers.len();
         let user = codex::load_layer(&input.paths.codex_home);
         layers.push((Scope::Global, Layer::Global, user));
     }
@@ -292,16 +294,20 @@ fn load_codex(input: &LoadInput, options: &Options, managed_on: bool, loaded: &m
     for layer in std::mem::take(&mut sources.top_configs) {
         layers.push((Scope::Global, Layer::Managed, layer));
     }
-    let pinned = sources
-        .requirements
-        .iter()
-        .rev()
-        .find(|r| r.feature.is_some());
-    let feature = pinned
-        .and_then(|r| r.feature)
-        .or_else(|| layers.iter().rev().find_map(|(_, _, l)| l.feature));
-    let cloud_off = feature == Some(false) && pinned.is_some_and(|r| r.cloud);
-    if feature == Some(false) && !cloud_off {
+    // Any local process can sign the cloud cache, so its `hooks = false` keeps managed hooks.
+    let feature = |cloud: bool| {
+        let requirements = sources.requirements.iter().filter(|r| cloud || !r.cloud);
+        let configs = layers
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| cloud || !cloud_layers.contains(i));
+        requirements
+            .rev()
+            .find_map(|r| r.feature)
+            .or_else(|| configs.rev().find_map(|(_, (_, _, l))| l.feature))
+    };
+    let cloud_off = feature(true) == Some(false);
+    if feature(false) == Some(false) {
         pi_ext_sdk::info!("hooks: Codex [features] hooks = false; Codex hooks are off");
         return;
     }
