@@ -131,6 +131,12 @@ pub const SWITCHES: &[Switch] = &[
         about: "Codex hooks with onFailure: \"block\" block when they fail, as in Codex 0.173.0-alpha.",
         default: false,
     },
+    Switch {
+        key: crate::limit::SWITCH,
+        label: "Claude prompt and agent hook limit",
+        about: "Run at most 12 prompt and agent hooks of one event and 24 of the session at once, as Claude Code does.",
+        default: false,
+    },
 ];
 
 /// The value of each switch in `doc`, else its default.
