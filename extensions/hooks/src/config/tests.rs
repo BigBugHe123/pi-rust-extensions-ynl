@@ -373,6 +373,20 @@ fn a_project_options_file_cannot_turn_off_managed_hooks() {
 }
 
 #[test]
+fn the_user_codex_feature_applies_in_every_scope() {
+    let f = fixture();
+    write(
+        &f.paths.codex_home.join("config.toml"),
+        "[features]\nhooks = false\n",
+    );
+    write(&f.cwd.join(".codex/hooks.json"), &hooks_json("xp"));
+    write(&f.cwd.join(".pi/ext/hooks.json"), r#"{"scope":"project"}"#);
+    assert!(commands(&load_with(&f, true)).is_empty());
+    write(&f.paths.codex_home.join("config.toml"), "");
+    assert_eq!(commands(&load_with(&f, true)), ["codex/project:xp"]);
+}
+
+#[test]
 fn user_policy_keys_apply_in_every_scope() {
     let f = fixture();
     let user = json!({

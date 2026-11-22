@@ -146,17 +146,17 @@ fn select(found: Vec<Found>) -> Vec<PolicyDoc> {
     let (admin, user): (Vec<Found>, Vec<Found>) = found
         .into_iter()
         .partition(|found| found.source != PolicySource::Hkcu);
-    let merge = admin
+    let decider = admin
         .iter()
-        .find(|found| found.delivers_policy() || found.behavior().is_some())
-        .and_then(Found::behavior)
-        == Some("merge");
+        .find(|found| found.delivers_policy() || found.behavior().is_some());
+    let merge = decider.and_then(Found::behavior) == Some("merge");
+    let user_decided = decider.is_some_and(|found| found.source.user_writable());
     let admin_present = admin.iter().any(Found::present);
     let mut chosen: Vec<Found> = admin.into_iter().filter(Found::delivers_policy).collect();
     let mut displaced = Vec::new();
     if !merge && !chosen.is_empty() {
         let rest = chosen.split_off(1);
-        if chosen[0].source.user_writable() {
+        if chosen[0].source.user_writable() || user_decided {
             displaced = rest;
         }
     }

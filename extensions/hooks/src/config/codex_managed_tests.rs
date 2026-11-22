@@ -194,6 +194,11 @@ fn cloud_requirements_apply_only_when_stricter() {
     write(&paths.codex_home.join("config.toml"), &stop_hook("user"));
     write_cache(&paths.codex_home, "[features]\nhooks = false\n", "");
     assert_eq!(summaries(&paths, base, &[]), ["sys:managed"]);
+    let system_off = format!("[features]\nhooks = false\n{}", stop_hook("sys"));
+    write(&base.join("etc/config.toml"), &system_off);
+    write_cache(&paths.codex_home, "[features]\nhooks = true\n", "");
+    assert_eq!(summaries(&paths, base, &[]), ["sys:managed", "user:global"]);
+    write(&base.join("etc/config.toml"), &stop_hook("sys"));
     assert_eq!(
         run(&stop_hook("cloudreq")),
         [

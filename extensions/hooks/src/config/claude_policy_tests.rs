@@ -263,6 +263,13 @@ fn the_server_copy_keeps_the_locks_of_the_sources_it_outranks() {
     fx.remote(json!({ "managedSourcesBehavior": "first-wins", "allowManagedHooksOnly": false }));
     let docs = claude_policy_docs(&fx.paths, &Options::default());
     assert_eq!(lock(&docs, "allowManagedHooksOnly"), Some(true));
+    fx.remote(json!({ "managedSourcesBehavior": "first-wins" }));
+    fx.plist(json!({ "managedSourcesBehavior": "merge", "model": "x" }));
+    fx.files(json!({ "allowManagedHooksOnly": true }));
+    let docs = claude_policy_docs(&fx.paths, &Options::default());
+    assert_eq!(sources_of(&docs), [PolicySource::Files, PolicySource::Mdm]);
+    assert_eq!(lock(&docs, "allowManagedHooksOnly"), Some(true));
+    std::fs::remove_file(fx.dir.path().join("mdm/com.anthropic.claudecode.plist")).unwrap();
     fx.remote(json!({ "hooks": hooks("remote") }));
     fx.files(json!({ "allowManagedHooksOnly": false }));
     let docs = claude_policy_docs(&fx.paths, &Options::default());

@@ -14,11 +14,7 @@ use super::options::read_json;
 use super::parse_hooks;
 use crate::model::{HookDef, Layer, Plugin, Scope, Source, trust_hash};
 
-const LEGACY_MANIFESTS: [&str; 3] = [
-    ".codex-plugin/plugin.json",
-    ".claude-plugin/plugin.json",
-    ".cursor-plugin/plugin.json",
-];
+const LEGACY_MANIFEST_DIRS: [&str; 3] = [".codex-plugin", ".claude-plugin", ".cursor-plugin"];
 const AGENT_SCHEMA_PREFIX: &str = "https://agent-plugins.org/schemas/";
 
 /// Plugin hooks from `configs` (config documents, lowest precedence first). `pinned` is the
@@ -224,7 +220,11 @@ fn resolve(root: &Path, path: &str) -> Option<PathBuf> {
             "hooks: ignoring plugin hooks path {path}: use ./ inside the plugin root"
         );
     }
-    inside.map(|r| root.join(r))
+    inside.map(|r| {
+        r.split(['/', '\\'])
+            .filter(|part| !part.is_empty() && *part != ".")
+            .fold(root.to_path_buf(), |path, part| path.join(part))
+    })
 }
 
 /// `Some(Some(path))` for a legacy manifest, `Some(None)` for a root Agent Plugins manifest.
@@ -242,8 +242,8 @@ fn find_manifest(root: &Path) -> Option<Option<PathBuf>> {
         Err(err) if err.kind() == ErrorKind::NotFound => {}
         Err(_) => return None,
     }
-    for relative in LEGACY_MANIFESTS {
-        let path = root.join(relative);
+    for dir in LEGACY_MANIFEST_DIRS {
+        let path = root.join(dir).join("plugin.json");
         match std::fs::symlink_metadata(path.parent()?) {
             Ok(meta) if !meta.file_type().is_dir() => return None,
             Ok(_) => {}

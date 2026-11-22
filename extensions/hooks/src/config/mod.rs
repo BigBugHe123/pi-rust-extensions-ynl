@@ -271,6 +271,14 @@ fn load_codex(input: &LoadInput, options: &Options, managed_on: bool, loaded: &m
         cloud_layers.end = layers.len();
         let user = codex::load_layer(&input.paths.codex_home);
         layers.push((Scope::Global, Layer::Global, user));
+    } else {
+        // The user `[features] hooks` applies in every `scope`; only its hooks follow `scope`.
+        let feature = codex::load_layer(&input.paths.codex_home).feature;
+        let user = codex::CodexLayer {
+            feature,
+            ..Default::default()
+        };
+        layers.push((Scope::Global, Layer::Global, user));
     }
     if scoped(Scope::Project) {
         let markers = managed::codex_root_markers(&input.paths.codex_home);
@@ -307,7 +315,7 @@ fn load_codex(input: &LoadInput, options: &Options, managed_on: bool, loaded: &m
             .or_else(|| configs.rev().find_map(|(_, (_, _, l))| l.feature))
     };
     let cloud_off = feature(true) == Some(false);
-    if feature(false) == Some(false) {
+    if cloud_off && feature(false) == Some(false) {
         pi_ext_sdk::info!("hooks: Codex [features] hooks = false; Codex hooks are off");
         return;
     }
