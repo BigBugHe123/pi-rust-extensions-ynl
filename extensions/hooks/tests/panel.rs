@@ -260,6 +260,7 @@ async fn settings_tab_sets_the_conflict_mode_in_place() {
     let lines = key(&mut host, &surface, "\u{1b}[Z").await;
     assert!(lines.contains("[Settings ("), "{lines}");
     assert!(lines.contains("Conflicts between layers"), "{lines}");
+    key(&mut host, &surface, "\u{1b}[H").await;
     for _ in 0..5 {
         key(&mut host, &surface, DOWN).await;
     }

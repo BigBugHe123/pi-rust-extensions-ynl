@@ -49,6 +49,7 @@ pub struct Switch {
     pub default: bool,
 }
 
+pub const CODEX_ON_FAILURE: &str = "codex/onFailure";
 pub const CODEX_SYSTEM: &str = "managed/codexSystem";
 pub const CODEX_REQUIREMENTS: &str = "managed/codexRequirements";
 pub const CODEX_MDM: &str = "managed/codexMdm";
@@ -123,6 +124,12 @@ pub const SWITCHES: &[Switch] = &[
         label: "Codex plugin hooks",
         about: "Hooks of enabled plugins in $CODEX_HOME/plugins/cache",
         default: true,
+    },
+    Switch {
+        key: CODEX_ON_FAILURE,
+        label: "Codex onFailure (follows a Codex pre-release)",
+        about: "Codex hooks with onFailure: \"block\" block when they fail, as in Codex 0.173.0-alpha.",
+        default: false,
     },
 ];
 
@@ -300,6 +307,7 @@ mod tests {
         let doc = json!({ "limits": { "b": true } });
         assert_eq!(read_switches(&doc, &TEST).get("limits/b"), Some(&true));
         assert!(Options::default().switch_on("unknown"));
+        assert!(!Options::default().switch_on(CODEX_ON_FAILURE));
     }
 
     #[test]

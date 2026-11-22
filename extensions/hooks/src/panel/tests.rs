@@ -134,6 +134,7 @@ fn renders_within_40_and_100_columns() {
     let wide = plain(&view.render(&rows, 100, None)).join("\n");
     for text in [
         "[All (5)]",
+        &format!("Settings ({})", Setting::all().len()),
         "+ Add a hook",
         "Claude Code (2)",
         "Codex (1)",
