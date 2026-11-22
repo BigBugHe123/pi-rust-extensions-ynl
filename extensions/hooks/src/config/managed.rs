@@ -1,12 +1,10 @@
 //! Organization policy files: Claude Code managed settings and Codex `requirements.toml`.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use super::codex::read_toml;
-use super::options::read_json;
 
 /// `managed-settings.json`, then `managed-settings.d/*.json` in name order without hidden files.
 pub fn claude_policy_files(dir: &Path) -> Vec<PathBuf> {
@@ -25,27 +23,6 @@ pub fn claude_policy_files(dir: &Path) -> Vec<PathBuf> {
     let mut files = vec![dir.join("managed-settings.json")];
     files.extend(drop_ins);
     files
-}
-
-pub fn claude_policy_docs(dir: &Path) -> Vec<(PathBuf, Value)> {
-    claude_policy_files(dir)
-        .into_iter()
-        .filter_map(|path| read_json(&path).map(|doc| (path, doc)))
-        .collect()
-}
-
-/// `enabledPlugins` by `plugin@marketplace` id: `true` force-enables, `false` blocks. A later doc
-/// wins per id.
-pub fn enabled_plugins<'a>(docs: impl Iterator<Item = &'a Value>) -> BTreeMap<String, bool> {
-    let mut enabled = BTreeMap::new();
-    for plugins in docs.filter_map(|doc| doc.get("enabledPlugins")?.as_object()) {
-        for (id, value) in plugins {
-            if let Some(on) = value.as_bool() {
-                enabled.insert(id.clone(), on);
-            }
-        }
-    }
-    enabled
 }
 
 /// Codex `requirements.toml` in the system dir.

@@ -50,12 +50,38 @@ pub struct Switch {
 }
 
 /// The switches that features add, in Settings tab order.
-pub const SWITCHES: &[Switch] = &[Switch {
-    key: "managed/forceEnabledPlugins",
-    label: "Force-enabled plugin hooks",
-    about: "Run hooks of plugins that Claude managed enabledPlugins sets to true, under allowManagedHooksOnly or a non-managed disableAllHooks.",
-    default: true,
-}];
+pub const SWITCHES: &[Switch] = &[
+    Switch {
+        key: "managed/claudeFiles",
+        label: "Claude managed settings files",
+        about: "Read managed-settings.json and managed-settings.d/*.json.",
+        default: true,
+    },
+    Switch {
+        key: "managed/claudeMdm",
+        label: "Claude MDM profile (macOS)",
+        about: "Read the com.anthropic.claudecode managed preferences plist.",
+        default: true,
+    },
+    Switch {
+        key: "managed/claudeRegistry",
+        label: "Claude registry policy (Windows)",
+        about: "Read the Settings value under HKLM and HKCU SOFTWARE\\Policies\\ClaudeCode.",
+        default: true,
+    },
+    Switch {
+        key: "managed/claudeServer",
+        label: "Claude server-managed settings",
+        about: "Read the remote-settings.json copy that Claude Code keeps.",
+        default: true,
+    },
+    Switch {
+        key: "managed/forceEnabledPlugins",
+        label: "Force-enabled plugin hooks",
+        about: "Run hooks of plugins that Claude managed enabledPlugins sets to true, under allowManagedHooksOnly or a non-managed disableAllHooks.",
+        default: true,
+    },
+];
 
 /// The value of each switch in `doc`, else its default.
 pub fn read_switches(doc: &Value, switches: &'static [Switch]) -> BTreeMap<&'static str, bool> {
