@@ -2,6 +2,38 @@
 
 All notable changes to pi-rust-extensions are documented here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, breaking changes bump the minor version.
 
+## [0.5.21] - 2026-11-21
+
+### Added
+
+- **hooks:** load Codex plugin, MDM, cloud cache, and managed_config.toml hooks ([7737076](https://github.com/yannelli/pi-rust-extensions/commit/7737076574eb9577107c08d46e2a98bf6304ac12))
+- **hooks:** read Claude managed policy from MDM, the registry, and the server-managed cache ([f6ba44a](https://github.com/yannelli/pi-rust-extensions/commit/f6ba44a2bbaf9d6c4633bd13feda7537f555403e))
+- **hooks:** add Claude Code's prompt and agent hook limit behind a switch ([20e1f5e](https://github.com/yannelli/pi-rust-extensions/commit/20e1f5e07510288524fcaaa07f31898cab94d395))
+- **hooks:** support Codex onFailure behind the codex/onFailure switch ([e8ccba4](https://github.com/yannelli/pi-rust-extensions/commit/e8ccba4785e0f0a1ce4233a31a8cc5fa1ccc95ee))
+- **hooks:** send PreCompact stdout as compaction instructions ([648c5db](https://github.com/yannelli/pi-rust-extensions/commit/648c5db268077a175ae6c53ed080c4baab66c75c))
+- **hooks:** run force-enabled plugin hooks under managed hook gates ([0e96f4b](https://github.com/yannelli/pi-rust-extensions/commit/0e96f4b38ab397bd302b4daade489dbb762114d5))
+- **hooks:** add feature switches to the /hooks Settings tab ([a374b89](https://github.com/yannelli/pi-rust-extensions/commit/a374b89f8ee4d10b244e147b18b4bbdd36784c73))
+- **hooks:** merge hooks by layer, load managed hooks, and match the Nov 2026 docs ([2950246](https://github.com/yannelli/pi-rust-extensions/commit/29502460bf9fd8a3f458c3e8eebb639a6fe3c360))
+
+### Fixed
+
+- **hooks:** keep admin locks when the server copy picks first-wins ([9ea7350](https://github.com/yannelli/pi-rust-extensions/commit/9ea735043612766d77cc3d5cd23d98cba8fbc33c))
+- **hooks:** turn off all Codex hooks when a root source sets hooks = false ([66a7021](https://github.com/yannelli/pi-rust-extensions/commit/66a7021c93a3ccb5e63b5d178aeac4d7b0a63a95))
+- **hooks:** fix review findings in the stacked hooks changes ([c946afd](https://github.com/yannelli/pi-rust-extensions/commit/c946afdb36a06dee4f8f7a3736ab021b44f53ba8))
+- **hooks:** gate PreCompact instructions on the compactionInstructions host feature ([181f36c](https://github.com/yannelli/pi-rust-extensions/commit/181f36c66327aaf542ec8109e22733209cb97e60))
+- **hooks:** apply stricter cloud requirements and keep plugin hooks disabled ([75c42c5](https://github.com/yannelli/pi-rust-extensions/commit/75c42c5062cd6a632f6080bb7270125e13c9a3e7))
+- **hooks:** ask for trust on user-writable managed hooks and limit plutil and reg ([dff2958](https://github.com/yannelli/pi-rust-extensions/commit/dff2958eec22fa6f614b6c419732258f0ae3423d))
+- **hooks:** load the Codex cloud cache as user hooks and recheck plugin files ([3fd64af](https://github.com/yannelli/pi-rust-extensions/commit/3fd64afc72cb88ee6b71eb9182e6ecc562691983))
+- **hooks:** say when the signature file moves and that pi skips the hook approval ([f745487](https://github.com/yannelli/pi-rust-extensions/commit/f74548742bb001bc8221e74f6bfc27644b1eb53d))
+- **hooks:** match Claude Code on the server cache age, merged disableAllHooks, and the plist user ([8f46a72](https://github.com/yannelli/pi-rust-extensions/commit/8f46a7274d67962bc1e4bab55723d0db7a994db4))
+- **hooks:** run Codex mcp_tool and asyncRewake hooks in the foreground ([41747ae](https://github.com/yannelli/pi-rust-extensions/commit/41747ae0dbd6f660f4f85a631250c438b6f4c83d))
+- **hooks:** fail Codex hookSpecificOutput without a valid hookEventName ([d00d7d5](https://github.com/yannelli/pi-rust-extensions/commit/d00d7d55d2e15ce03fb348b25dbbada5497fa2ff))
+- **hooks:** match Codex inline hook shapes and skip Codex-only plugin hooks ([2aa3257](https://github.com/yannelli/pi-rust-extensions/commit/2aa325740de89cad4dc5d829510a66df023ec750))
+- **hooks:** apply managed HTTP allowlists with the Claude source off ([27ca1ab](https://github.com/yannelli/pi-rust-extensions/commit/27ca1ab0985a9876fdfb8a3271b104082f43f750))
+- **hooks:** keep async prompt and agent hooks out of the hook limit ([1a7e5c7](https://github.com/yannelli/pi-rust-extensions/commit/1a7e5c72b9494e7b604c4e4d8492b6cd9c0f9b1a))
+- **hooks:** apply Claude managed plugin gates with the Claude source off ([cd18694](https://github.com/yannelli/pi-rust-extensions/commit/cd18694bea4f4cf9d6c2f4db8ebb47389a1c7dae))
+- **hooks:** correct the force-enabled plugin switch text and limits ([7612fdf](https://github.com/yannelli/pi-rust-extensions/commit/7612fdf568add2b9952adbf7ddb495dab6776ad2))
+
 ## [0.5.20] - 2026-11-19
 
 ### Fixed
