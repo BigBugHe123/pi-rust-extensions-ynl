@@ -53,7 +53,8 @@ pub struct Row {
     pub enabled: bool,
     pub trust: Trust,
     pub last: Option<LastRun>,
-    /// Other layers that define different hooks for the same event and matcher.
+    /// Under `warn` or `override`, the other layers that define different hooks for the same
+    /// event and matcher.
     pub conflict: Option<String>,
     /// Under `conflicts: "override"`, a more specific layer replaces this hook.
     pub shadowed: bool,

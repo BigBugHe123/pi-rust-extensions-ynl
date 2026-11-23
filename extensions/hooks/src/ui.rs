@@ -88,16 +88,21 @@ fn rows(rt: &Runtime) -> Vec<Row> {
     let hooks = rt.hooks();
     let enabled = |def: &HookDef| def.layer == Layer::Managed || !rt.is_disabled(def);
     let active = |def: &HookDef| enabled(def) && rt.trust_of(def) != Trust::Denied;
-    let shadowed = match rt.conflict_mode() {
+    let mode = rt.conflict_mode();
+    let shadowed = match mode {
         ConflictMode::Override => policy::shadowed(&hooks, active),
         _ => HashSet::new(),
     };
-    let conflicts = rt
-        .lock()
-        .loaded
-        .as_ref()
-        .map(|l| l.conflicts.clone())
-        .unwrap_or_default();
+    // Under `merge` all layers run, as in Claude Code and Codex, so no hook is tagged.
+    let conflicts = match mode {
+        ConflictMode::Merge => Vec::new(),
+        _ => rt
+            .lock()
+            .loaded
+            .as_ref()
+            .map(|l| l.conflicts.clone())
+            .unwrap_or_default(),
+    };
     let mut rows: Vec<Row> = hooks
         .iter()
         .map(|def| {
