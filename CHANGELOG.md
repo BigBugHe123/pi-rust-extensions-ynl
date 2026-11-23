@@ -2,6 +2,12 @@
 
 All notable changes to pi-rust-extensions are documented here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, breaking changes bump the minor version.
 
+## [0.5.22] - 2026-11-22
+
+### Fixed
+
+- **web-search:** send Claude Code 2.1.322 on Anthropic OAuth searches ([25e93c3](https://github.com/yannelli/pi-rust-extensions/commit/25e93c3f5d89835cd24299cd35ab56c16091de73))
+
 ## [0.5.21] - 2026-11-21
 
 ### Added
