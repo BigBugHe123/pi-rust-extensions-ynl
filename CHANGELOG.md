@@ -2,6 +2,12 @@
 
 All notable changes to pi-rust-extensions are documented here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, breaking changes bump the minor version.
 
+## [0.5.23] - 2026-11-22
+
+### Fixed
+
+- **hooks:** show conflict tags only under warn and override ([7be1016](https://github.com/yannelli/pi-rust-extensions/commit/7be1016cfdc9eab2e8adeed251ca5f9fecbb77cf))
+
 ## [0.5.22] - 2026-11-22
 
 ### Fixed
