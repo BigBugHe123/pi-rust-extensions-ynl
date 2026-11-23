@@ -256,7 +256,8 @@ async fn settings_tab_sets_the_conflict_mode_in_place() {
     let mut host = TestHost::start(extension(env.paths.clone()));
     host.initialize().await;
     let (panel, surface, lines) = open(&mut host, 1, ctx(&env, true)).await;
-    assert!(lines.contains("[conflict]"), "{lines}");
+    assert!(lines.contains("echo project"), "{lines}");
+    assert!(!lines.contains("[conflict]"), "{lines}");
     let lines = key(&mut host, &surface, "\u{1b}[Z").await;
     assert!(lines.contains("[Settings ("), "{lines}");
     assert!(lines.contains("Conflicts between layers"), "{lines}");
@@ -281,6 +282,7 @@ async fn settings_tab_sets_the_conflict_mode_in_place() {
     assert!(lines.contains("Set conflicts"), "{lines}");
     let lines = key(&mut host, &surface, "\t").await;
     assert!(lines.contains("[shadowed]"), "{lines}");
+    assert!(lines.contains("[conflict]"), "{lines}");
     close(&mut host, 1, &panel, &surface).await;
     let doc: Value =
         serde_json::from_str(&std::fs::read_to_string(env.agent.join("ext/hooks.json")).unwrap())
