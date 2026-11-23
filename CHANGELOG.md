@@ -2,6 +2,12 @@
 
 All notable changes to pi-rust-extensions are documented here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, breaking changes bump the minor version.
 
+## [0.5.24] - 2026-11-23
+
+### Added
+
+- **iterm2:** add /iterm2 panel with tab color themes and per-state colors (#79) ([56ae981](https://github.com/yannelli/pi-rust-extensions/commit/56ae981d4bc8f6ea2cb164a0fc9a0dd79f2be7f8))
+
 ## [0.5.23] - 2026-11-22
 
 ### Fixed
