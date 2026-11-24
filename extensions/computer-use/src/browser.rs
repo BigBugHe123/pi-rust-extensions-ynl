@@ -36,6 +36,7 @@ impl Drop for Managed {
 #[serde(rename_all = "camelCase", default)]
 pub struct BrowserArgs {
     pub url: Option<String>,
+    pub port: Option<u16>,
     pub state_id: String,
     pub expression: String,
 }
@@ -214,7 +215,20 @@ impl Live<'_> {
         if let Some(url) = url {
             check_url(url)?;
         }
-        let port = self.ensure_browser().await?;
+        let port = if let Some(port) = args.port {
+            port
+        } else {
+            self.ensure_browser().await?
+        };
+        if args.port.is_some() {
+            let _ = cdp::get_json(port, "/json/version").await?;
+            *self.rt.browser() = Some(Managed {
+                port,
+                name: display_name(self.rt.config().managed_browser),
+                pid: 0,
+                child: None,
+            });
+        }
         let roots = page::roots(self.rt).await?;
         let root = roots
             .into_iter()
