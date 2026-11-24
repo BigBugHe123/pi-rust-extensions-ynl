@@ -281,6 +281,23 @@ impl Workflow {
         names
     }
 
+    /// Clears the `ask` models, so those agents use the model they inherit, and names them.
+    pub fn clear_ask(&mut self) -> Vec<String> {
+        let mut asked = Vec::new();
+        let mut clear = |model: &mut Option<String>, label: String| {
+            if model.as_deref() == Some(ASK) {
+                *model = None;
+                asked.push(label);
+            }
+        };
+        clear(&mut self.agent.model, "the workflow default".into());
+        clear(&mut self.planner.model, "the planner".into());
+        for step in &mut self.steps {
+            clear(&mut step.agent.model, format!("step {}", step.name));
+        }
+        asked
+    }
+
     /// Problems that stop the workflow from running; empty when it is valid.
     pub fn problems(&self) -> Vec<String> {
         let mut problems = Vec::new();
@@ -581,6 +598,23 @@ mod tests {
             problems.contains("step 2 (A): another step has the same name"),
             "{problems}"
         );
+    }
+
+    #[test]
+    fn clear_ask_names_the_agents_that_ask() {
+        let mut workflow: Workflow = serde_json::from_value(json!({
+            "name": "w", "agent": { "model": "ask" }, "planner": { "model": "ask" },
+            "steps": [{ "name": "a", "agent": { "model": "ask" }, "tasks": [{ "prompt": "p" }] },
+                      { "name": "b", "agent": { "model": "x/y" }, "tasks": [{ "prompt": "p" }] }]
+        }))
+        .unwrap();
+        assert_eq!(
+            workflow.clear_ask(),
+            ["the workflow default", "the planner", "step a"]
+        );
+        assert_eq!(workflow.agent.model, None);
+        assert_eq!(workflow.steps[1].agent.model.as_deref(), Some("x/y"));
+        assert!(workflow.clear_ask().is_empty());
     }
 
     #[test]

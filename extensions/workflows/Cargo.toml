@@ -4,7 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-rust-version.workspace = true
+# `File::try_lock` (1.89) keeps one runner per run.
+rust-version = "1.89"
 publish.workspace = true
 
 [dependencies]

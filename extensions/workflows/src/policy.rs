@@ -1,6 +1,7 @@
 //! The extension inside a step agent: it enforces the step's subagent rules on `subagent` calls,
 //! adds the `workflow_memory` tool in memory context, and passes the user's messages to the agent.
 
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -16,6 +17,13 @@ pub const MEMORY_ENV: &str = "PI_WORKFLOW_MEMORY";
 pub const MEMORY_TOOL: &str = "workflow_memory";
 /// The inbox of user messages for the step agent.
 pub const INBOX_ENV: &str = "PI_WORKFLOW_INBOX";
+/// What the subagents extension sets for its child agents. Subagents of a step agent inherit
+/// the workflow variables, so these tell them apart from the step agent.
+pub const SUBAGENT_ENVS: [&str; 3] = [
+    "PI_SUBAGENT_RUN_ID",
+    "PI_SUBAGENT_PARENT",
+    "PI_SUBAGENT_AGENT",
+];
 const INBOX_POLL: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Checks a `subagent` call against the rules. `Ok(Some(input))` fills in default models and
@@ -134,14 +142,22 @@ facts they need: decisions, commands that worked, gotchas, where things are. Do 
             let path = path.clone();
             async move {
                 let step = std::env::var(STEP_ENV).unwrap_or_default();
-                let mut text = std::fs::read_to_string(&path).unwrap_or_default();
-                text.push_str(&format!("\n- ({step}) {}\n", args.note.trim()));
-                std::fs::write(&path, text)?;
+                // One append per note, so notes of parallel subagents do not overwrite each other.
+                let note = format!("\n- ({step}) {}\n", args.note.trim());
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)?
+                    .write_all(note.as_bytes())?;
                 Ok("Saved to the workflow memory.")
             }
         });
     }
-    if let Ok(inbox) = std::env::var(INBOX_ENV) {
+    // Only the step agent reads the inbox; its subagents inherit the variable.
+    let subagent = SUBAGENT_ENVS
+        .iter()
+        .any(|name| std::env::var_os(name).is_some());
+    if let Some(inbox) = std::env::var(INBOX_ENV).ok().filter(|_| !subagent) {
         // A message sent before the agent starts would start a prompt of its own.
         let working = Arc::new(AtomicBool::new(false));
         for (event, value) in [("agent_start", true), ("agent_end", false)] {

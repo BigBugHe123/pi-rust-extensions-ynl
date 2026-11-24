@@ -1,6 +1,6 @@
 # pi-ext-workflows
 
-Created 2026-11-04. Last updated 2026-11-04.
+Created 2026-11-04. Last updated 2026-11-24.
 
 Runs multi-agent workflows. A workflow is a list of steps; one pi agent runs each step and works through the step's tasks in one session. Each step has its own model, thinking level, tools, skills, MCP servers, subagent rules, and environment. Tasks can wait, repeat on a schedule, loop until a goal is met, or wait for the user's approval. Run it with `pi-rust-ext workflows`.
 
@@ -15,15 +15,19 @@ A `fixed` workflow runs its steps as written. A `dynamic` workflow has a planner
 | `/workflows` | The saved workflows and the runs, on two tabs. |
 | `/workflows new` | The editor with an empty workflow. |
 | `/workflows edit <name>` | The editor for one workflow. |
-| `/workflows run <name>` | The run dialog: models marked `ask`, then the `{{inputs}}`. |
+| `/workflows run <name>` | The run dialog: models marked `ask`, then the `{{inputs}}`, then the run view. |
 | `/workflows runs` | The runs tab. |
 | `/workflows approve [<run id>] [run \| skip \| stop]` | Answers a waiting approval; without an id, the one run that waits. It works without a UI: `pi -p "/workflows approve wf-abc"`. |
 
-Home keys: `enter` edit, `r` run, `n` new, `g` generate (the session model drafts a workflow from your description, and the draft opens in the editor), `c` copy, `d` delete, `tab` switches tabs. On the runs tab and in the run view: `enter` opens a run, `x` stops it, `s` ends the current wait, `b` switches it between background and foreground, `a` approves the task that waits, `n` skips that task, `m` sends a message to the agent that works now, and `r` resumes a stopped, failed, or interrupted run. The key line shows the keys that apply to the selected run.
+The panel has the layout of `/hooks`, `/deferred`, and `/claude-plugins`: a title line, the tabs, a search line, the list, a status line, and the keys. It uses the terminal height that pi leaves, less the lines of the runs widget. Results and errors show in the status line until the next key. In every screen, `esc` (or `q` and `←` where typing does not filter) goes back one screen, and closes the panel from home.
 
-The run view shows the steps and, for the selected step, its log, its report, and the output of its agent: the task prompt, the agent's messages, its tool calls, failed tool results, and the text it writes now. It follows the run's current step until you pick a step with `↑↓`, and stays at the newest output until you scroll with `pgup`. `end` goes back to the newest output. A message sent with `m` reaches the agent as steering after its current tool call, and appears in the output with `›`.
+Home: `tab` or `←→` switch between the Workflows and Runs tabs. Typing filters the list (names, descriptions, run ids, and statuses), and `esc` clears the filter before it closes the panel. On the Workflows tab, `enter` on a workflow shows its details and its actions: Run, Edit, Copy to a new workflow, Show its runs (the Runs tab with only the runs of this workflow; `esc` shows all runs again), and Delete, which asks first under the details. The first two rows start a new workflow and generate one: the session model drafts a workflow from your description while a spinner shows (`esc` cancels), and the draft opens in the editor. On the Runs tab, `enter` opens the run view.
 
-The editor shows the steps and tasks as a tree on the left and the form of the selected row on the right (stacked below 96 columns). Tree keys: `enter` edits the row, `a` adds a step, `t` adds a task, `J`/`K` move the row, `c` copies it, `d` deletes it, `s` saves, `r` saves and runs, `esc` leaves (it asks when there are unsaved changes). Form keys: `enter` changes the field, `x` resets it to inherit, `esc` returns to the tree. Text fields use pi's input and editor dialogs. Models, skills, tools, MCP servers, and subagent types use a list in the panel: type to filter, `space` checks, `enter` finishes, `ctrl+r` resets to inherit, and typed text that names no item can be used as a value (for example `anthropic/*`).
+The run view shows the steps and, for the selected step, its log, its report, and the output of its agent: the task prompt, the agent's messages, its tool calls, failed tool results, and the text it writes now. `↑↓` (or `j`/`k`) pick a step; until you pick one, the view follows the run's current step. It stays at the newest output of a running step until you scroll with `pgup`; `pgdn` or `space` scroll down, `home` goes to the top, and `end` back to the newest output. `enter` lists the actions that apply to the run now; when the run changes so that the action under the pointer no longer applies, the list closes. Each action also has a key, and the key line shows them: `a` approves the task that waits, `n` skips it, `m` sends a message to the agent that works now, `s` ends the current wait, `b` switches the run between background and foreground, `x` stops it, `r` resumes a stopped, failed, or interrupted run, and `d` deletes a run that does not run. Stop and delete ask first in the status line. A message sent with `m` reaches the agent as steering after its current tool call, and appears in the output with `›`. While the panel is open, approvals wait in it instead of in a dialog over it.
+
+The editor shows the steps and tasks as a tree on the left and the form of the selected row on the right (stacked below 96 columns). The form scrolls to keep the selected field in view. Tree keys: `enter` edits the row, `a` adds a step, `t` adds a task, `J`/`K` move the row, `c` copies it, `d` deletes it (a step asks first in the status line), `s` saves, `r` saves and runs, `esc` leaves (with unsaved changes the status line asks: `s` saves and closes, `d` closes without saving). Form keys: `enter` changes the field, `x` or `delete` resets it to inherit, `esc` returns to the tree. Text fields use pi's input and editor dialogs.
+
+Tools, skills, MCP servers, subagent types, and the models and thinking levels of a subagent rule use a checklist in the panel. The pointer starts on the current value. Type to filter, `space` checks an item, `ctrl+a` checks or unchecks all shown items, and `enter` finishes with the checked items, or with the row under the pointer when none is checked. The first rows set the field back to inherit (`↺`, or `ctrl+r`) and, for tools, skills, and MCP servers, to none (`∅`); `space` picks them at once, `enter` only while nothing is checked. Models and the skill of a task use a single-choice list: type to filter and `enter` chooses; `inherit`, `ask`, and `none` are rows of the list. In both, typed text that names no item can be used as a value (for example `anthropic/*`); a model must be `provider/id`.
 
 While a run is active, the widget `workflows` above the editor shows each run's steps, `bg` for a background run, and what the current step does, how long it waits, or which task waits for approval. When pi starts while runs are active, a notification names them and points to `/workflows runs`. When a run ends, a `workflow-run` message reports each step; it starts a turn when an agent of this pi started the run. A run that ends while no pi watches it is reported by the next pi session with a UI.
 
@@ -37,7 +41,7 @@ While a run is active, the widget `workflows` above the editor shows each run's 
 | `scope` | `global` or `project` for `save`. Default: where the workflow is now, else global. |
 | `background` | For `run`: keep the run going after pi quits. Default: the workflow's `background`, and always `true` when pi has no UI (print mode). |
 
-`run` returns the run id at once; the agent goes on while the run works. The tool cannot answer approvals; the user answers them. `status` with an id lists each step's status, time, cost, agent runs, turns, model, log, and last report, which the `workflow-optimize` skill uses.
+`run` returns the run id at once; the agent goes on while the run works. Models marked `ask` use the model they inherit when an agent starts the run, and the result says which. The tool cannot answer approvals; the user answers them. `status`, `resume`, and the other actions with an `id` also find runs older than the 30 newest. `status` with an id lists each step's status, time, cost, agent runs, turns, model, log, and last report, which the `workflow-optimize` skill uses.
 
 ## Skills
 
@@ -54,8 +58,8 @@ Both include the file format reference, `skills/format.md`.
 | --- | --- |
 | `<agentDir>/ext/workflows/definitions/<name>.json` | Global workflows |
 | `<cwd>/.pi/ext/workflows/definitions/<name>.json` | Project workflows. They load only in a trusted project and hide a global workflow of the same name. In a git worktree without this folder, the main checkout's folder applies. |
-| `<agentDir>/ext/workflows/runs/<id>/` | `run.json` (state, history, resume), one session file per step (`01-<step>.jsonl`, or `session.jsonl` in `session` context), `memory.md`, `report.schema.json`, `plan.schema.json`, `commands/` (commands to the runner), `runner.log` (the runner's stderr), and `reported-<endedMs>` (the claim of the pi that reported the run's end). Directories older than 30 days are deleted at startup. |
-| `<agentDir>/ext/workflows/sessions/<pid>` | The liveness file of each running pi, refreshed every 2 seconds. |
+| `<agentDir>/ext/workflows/runs/<id>/` | `run.json` (state, history, resume), one session file per step (`01-<step>.jsonl`, or `session.jsonl` in `session` context), `memory.md`, `report.schema.json`, `plan.schema.json`, `commands/` (commands to the runner), `inbox/` (messages for the agent that works now), `output/` (the output of each step's agent), `runner.log` (the runner's stderr), `runner.lock` (held by the runner while it runs), and `reported-<endedMs>` (the claim of the pi that reported the run's end). Directories older than 30 days are deleted at startup. |
+| `<agentDir>/ext/workflows/sessions/<pid>` | The liveness file of each running pi, refreshed every 2 seconds. Files older than an hour are deleted at startup. |
 
 ## Step agent
 
@@ -68,7 +72,7 @@ Both include the file format reference, `skills/format.md`.
 - The first agent run of a step gets a header with the workflow, the step, and, by `context`, the reports of the earlier steps (`handoff`, `memory`) and the shared notes (`memory`). Later runs of the step continue its session, so tasks see the earlier tasks.
 - Env: the step's `env`, with `${NAME}` read from the environment of pi, plus `PI_WORKFLOW_RUN`, `PI_WORKFLOW_STEP`, `PI_WORKFLOW_INBOX`, and `PI_TODO_SCOPE=<run id>-<step number>`. `PI_WORKFLOW_SUBAGENTS` carries the step's subagent rules and `PI_WORKFLOW_MEMORY` the path of the shared notes.
 
-In a step agent or the planner (`PI_WORKFLOW_RUN` is set) the extension registers only three things. While the agent works, it passes each message in `PI_WORKFLOW_INBOX` to the agent as steering. A `tool_call` handler checks each `subagent` call against `PI_WORKFLOW_SUBAGENTS`: it blocks agent types, models, and thinking levels outside the rules, and fills in the first concrete model and first thinking level of the rule when the call gives none. The `workflow_memory` tool (`note`) appends to the shared notes in `memory` context.
+In a step agent or the planner (`PI_WORKFLOW_RUN` is set) the extension registers only three things. While the agent works, it passes each message in `PI_WORKFLOW_INBOX` to the agent as steering (not in subagents, which have `PI_SUBAGENT_RUN_ID`). A `tool_call` handler checks each `subagent` call against `PI_WORKFLOW_SUBAGENTS`: it blocks agent types, models, and thinking levels outside the rules, and fills in the first concrete model and first thinking level of the rule when the call gives none. The `workflow_memory` tool (`note`) appends to the shared notes in `memory` context.
 
 ## Runs
 
@@ -79,7 +83,10 @@ pi starts `pi-rust-ext workflows --runner <run dir>` for each run, in its own pr
 - Waits (`delay`, `every`) show a countdown; `s` ends the wait at once. When an interrupted run resumes, its first wait uses the deadline it had, so a wait does not start over.
 - Output: the runner appends the output of each step's agent to `output/<step number>.jsonl`, one `{kind, text}` entry per line (`prompt`, `user`, `assistant`, `tool`, `error`), and keeps the end of the message the agent writes now in the step's `writing`. A message for the agent is a JSON string file in `inbox/`; messages that the agent did not read before it finished go to the step log.
 - Reports: the owner reports the end of its runs. A pi session with a UI reports the end of a run whose owner is gone. The pi that creates `reported-<endedMs>` first reports it, so each end is reported once.
-- A pi session marks an active run whose heartbeat is more than 30 seconds old as `interrupted`, for example after a restart of the computer. `resume` continues a run at the task that did not finish, in the same session file.
+- A runner holds a lock on `runner.lock` while it runs, so a run never has two runners: when two sessions resume a run at once, the second runner finds the lock taken and exits. A pi session marks an active run as `interrupted` when its heartbeat is more than 30 seconds old and no runner holds the lock (where files cannot be locked: when the process `runner` in `run.json` is gone), for example after a restart of the computer. A runner that a suspended computer paused keeps its run. Deleting a run takes the lock first. A runner that cannot start fails its run at once.
+- After a step agent exits, the runner reads its remaining output for at most 2 seconds, so a process that the agent started and that keeps the output open does not hold the run.
+- `resume` continues a run at the task that did not finish, in the same session file. A repeating or goal task keeps its count (`taskRuns` in the step), so it runs only the runs that are left; once a task has started, it does not ask for approval or wait its `delay` again. A failed task runs again with all its runs. An agent run that stopped before pi wrote its session gets the step header again.
+- Subagents of a step agent inherit the workflow variables. Only the step agent reads the inbox, and `workflow_memory` appends each note, so notes of parallel agents do not overwrite each other. The runner removes `PI_SUBAGENT_RUN_ID`, `PI_SUBAGENT_PARENT`, and `PI_SUBAGENT_AGENT` from the step agent's environment.
 
 ## Format
 

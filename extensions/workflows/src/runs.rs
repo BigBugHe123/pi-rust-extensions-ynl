@@ -1,7 +1,7 @@
 //! Run state: what each step did. The runner of a run owns its `run.json`; pi sessions read it
 //! for the UI, the widget, and reports.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -83,6 +83,10 @@ pub struct StepRun {
     pub status: StepStatus,
     /// Tasks finished; resume starts at this task.
     pub tasks_done: usize,
+    /// Finished agent runs of the task that runs now. `None` until its approval and delay are
+    /// over, so a resumed task keeps its run count and does not wait its delay again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_runs: Option<u32>,
     /// Agent runs of the step, repeats included.
     pub runs: u32,
     pub started_ms: Option<u64>,
@@ -135,6 +139,8 @@ pub struct RunState {
     pub background: bool,
     /// The process id of the pi the run belongs to. That pi reports the end of the run.
     pub owner: u32,
+    /// The process id of the runner.
+    pub runner: u32,
     pub heartbeat_ms: u64,
     pub approval: Option<Approval>,
     /// The pi binary the runner starts agents with.
@@ -173,7 +179,8 @@ impl RunState {
         Some(Duration::from_millis(until.saturating_sub(now_ms())))
     }
 
-    /// Active, but the runner stopped writing its heartbeat.
+    /// Active, but the runner stopped writing its heartbeat. A runner that a suspended computer
+    /// paused also misses heartbeats, so callers check `runner_running` too.
     pub fn stale(&self) -> bool {
         self.status.active() && now_ms().saturating_sub(self.heartbeat_ms) > STALE_MS
     }
@@ -260,7 +267,8 @@ pub fn append_output(path: &Path, entries: &[child::Entry]) -> usize {
 }
 
 pub fn read_output(path: &Path) -> Vec<child::Entry> {
-    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let bytes = std::fs::read(path).unwrap_or_default();
+    let text = String::from_utf8_lossy(&bytes);
     let entries: Vec<child::Entry> = text
         .lines()
         .filter_map(|line| serde_json::from_str(line).ok())
@@ -287,6 +295,54 @@ pub fn new_id() -> String {
     format!("wf-{}", out.into_iter().collect::<String>())
 }
 
+/// The lock a runner holds on its run directory for its whole life, so one run never has two
+/// runners. `Ok(None)` while another process holds it.
+pub fn lock_runner(dir: &Path) -> std::io::Result<Option<std::fs::File>> {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(LOCK_FILE))?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(err)) => Err(err),
+    }
+}
+
+/// Whether a runner runs the run in `dir`: its lock is taken, or, where files cannot be locked,
+/// its process runs.
+pub fn runner_running(dir: &Path, run: &RunState) -> bool {
+    match lock_runner(dir) {
+        Ok(lock) => lock.is_none(),
+        Err(_) => runner_alive(run.runner, &run.id),
+    }
+}
+
+/// Whether the process `pid` is the runner of run `id`. The command line check keeps a reused
+/// process id from counting.
+pub fn runner_alive(pid: u32, id: &str) -> bool {
+    if pid == 0 || id.is_empty() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        if Path::new("/proc/self").exists() {
+            return std::fs::read(format!("/proc/{pid}/cmdline"))
+                .is_ok_and(|cmdline| String::from_utf8_lossy(&cmdline).contains(id));
+        }
+        std::process::Command::new("ps")
+            .args(["-o", "args=", "-p", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .output()
+            .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).contains(id))
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 struct Entry {
     state: RunState,
     dir: PathBuf,
@@ -298,6 +354,9 @@ struct Entry {
 #[derive(Clone, Default)]
 pub struct Runs {
     inner: Arc<Mutex<BTreeMap<String, Entry>>>,
+    /// When `refresh` last read the `run.json` of each older run it does not keep, so an older
+    /// run is read again only when it changes (for example when it resumes).
+    seen: Arc<Mutex<BTreeMap<String, Option<SystemTime>>>>,
     /// Keeps the writes of one process in order, so a later write never holds older state.
     writing: Arc<Mutex<()>>,
 }
@@ -330,8 +389,12 @@ impl Runs {
             .collect()
     }
 
-    pub fn any_active(&self) -> bool {
-        self.lock().values().any(|e| e.state.status.active())
+    /// How many runs are active.
+    pub fn active(&self) -> usize {
+        self.lock()
+            .values()
+            .filter(|e| e.state.status.active())
+            .count()
     }
 
     pub fn update<R>(&self, id: &str, edit: impl FnOnce(&mut RunState) -> R) -> Option<R> {
@@ -355,8 +418,9 @@ impl Runs {
         save(&dir, &state);
     }
 
-    /// Reads the newest `keep` runs and the active runs it knows from `root`; a `run.json` is
-    /// parsed again only when it changed.
+    /// Reads the newest `keep` runs and every active run from `root`; a `run.json` is parsed
+    /// again only when it changed. Runs that are gone from disk, or older and no longer active,
+    /// leave the list.
     pub fn refresh(&self, root: &Path, keep: usize) {
         let Ok(entries) = std::fs::read_dir(root) else {
             return;
@@ -368,29 +432,44 @@ impl Runs {
             .collect();
         dirs.sort();
         let newest = dirs.len().saturating_sub(keep);
+        let mut listed: HashSet<String> = HashSet::new();
+        let mut present: HashSet<String> = HashSet::new();
         for (index, dir) in dirs.into_iter().enumerate() {
             let id = dir
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            present.insert(id.clone());
+            let file = dir.join(RUN_FILE);
+            let modified = std::fs::metadata(&file).and_then(|m| m.modified()).ok();
             let known = self
                 .lock()
                 .get(&id)
                 .map(|e| (e.modified, e.state.status.active()));
-            if index < newest && !known.is_some_and(|(_, active)| active) {
+            let old = index < newest;
+            let unchanged = match known {
+                Some((seen, _)) => seen == modified,
+                None if old => self.seen().get(&id) == Some(&modified),
+                None => false,
+            };
+            if unchanged {
+                if known.is_some_and(|(_, active)| active || !old) {
+                    listed.insert(id);
+                } else if old {
+                    self.seen().insert(id, modified);
+                }
                 continue;
             }
-            let file = dir.join(RUN_FILE);
-            let modified = std::fs::metadata(&file).and_then(|m| m.modified()).ok();
-            if modified.is_none() || known.is_some_and(|(seen, _)| seen == modified) {
+            if old {
+                self.seen().insert(id.clone(), modified);
+            }
+            let Some(state) = modified.and_then(|_| read_state(&dir)) else {
+                continue;
+            };
+            if old && !state.status.active() {
                 continue;
             }
-            let Ok(text) = std::fs::read_to_string(&file) else {
-                continue;
-            };
-            let Ok(state) = serde_json::from_str::<RunState>(&text) else {
-                continue;
-            };
+            listed.insert(id);
             self.lock().insert(
                 state.id.clone(),
                 Entry {
@@ -400,10 +479,56 @@ impl Runs {
                 },
             );
         }
+        self.lock().retain(|id, _| listed.contains(id));
+        self.seen().retain(|id, _| present.contains(id));
+    }
+
+    fn seen(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Option<SystemTime>>> {
+        self.seen.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The run with `id`, read from `root` when the list does not hold it.
+    pub fn find(&self, root: &Path, id: &str) -> Option<RunState> {
+        if let Some(state) = self.get(id) {
+            return Some(state);
+        }
+        let dir = root.join(id);
+        let state = read_state(&dir)?;
+        let modified = std::fs::metadata(dir.join(RUN_FILE))
+            .and_then(|m| m.modified())
+            .ok();
+        self.lock().insert(
+            id.to_owned(),
+            Entry {
+                state: state.clone(),
+                dir,
+                modified,
+            },
+        );
+        Some(state)
+    }
+
+    pub fn remove(&self, id: &str) {
+        self.lock().remove(id);
     }
 }
 
+fn read_state(dir: &Path) -> Option<RunState> {
+    parse_state(&std::fs::read_to_string(dir.join(RUN_FILE)).ok()?).ok()
+}
+
+/// A `run.json`. A file edited by hand can list fewer or more step states than steps; the
+/// list is cut or filled so each step has one.
+pub fn parse_state(text: &str) -> Result<RunState, String> {
+    let mut state: RunState = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    state
+        .steps
+        .resize(state.workflow.steps.len(), StepRun::default());
+    Ok(state)
+}
+
 pub const RUN_FILE: &str = "run.json";
+pub const LOCK_FILE: &str = "runner.lock";
 const RETENTION: Duration = Duration::from_secs(30 * 24 * 3600);
 
 fn save(dir: &Path, state: &RunState) {
@@ -439,15 +564,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn refresh_reads_changed_runs_and_stale_runs_interrupt() {
-        let a = new_id();
-        std::thread::sleep(Duration::from_millis(2));
-        let b = new_id();
-        assert!(a < b && a.starts_with("wf-"));
+    fn refresh_keeps_newest_and_active_runs_and_stale_runs_interrupt() {
+        let ids: Vec<String> = (0..3)
+            .map(|_| {
+                std::thread::sleep(Duration::from_millis(2));
+                new_id()
+            })
+            .collect();
+        let [done, waiting, newest] = [&ids[0], &ids[1], &ids[2]];
+        assert!(done < waiting && waiting < newest && done.starts_with("wf-"));
         let root = std::env::temp_dir().join(format!("wf-runs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
+        let workflow: Workflow = serde_json::from_str(
+            r#"{"name": "w", "steps": [{"name": "build", "tasks": [{"prompt": "p"}]}]}"#,
+        )
+        .unwrap();
         let mut state = RunState {
-            id: a.clone(),
+            id: waiting.clone(),
+            workflow,
             status: RunStatus::Waiting,
             wait_until_ms: Some(5),
             heartbeat_ms: now_ms(),
@@ -458,24 +592,45 @@ mod tests {
             }],
             ..RunState::default()
         };
-        save(&root.join(&a), &state);
-        save(
-            &root.join(&b),
-            &RunState {
-                id: b.clone(),
+        save(&root.join(waiting), &state);
+        for (id, status) in [(done, RunStatus::Done), (newest, RunStatus::Done)] {
+            let run = RunState {
+                id: id.clone(),
+                status,
                 ..RunState::default()
-            },
-        );
+            };
+            save(&root.join(id), &run);
+        }
         let runs = Runs::default();
         runs.refresh(&root, 1);
-        assert!(
-            runs.get(&b).is_some() && runs.get(&a).is_none(),
-            "keeps the newest"
-        );
-        runs.refresh(&root, 10);
-        let loaded = runs.get(&a).unwrap();
+        assert!(runs.get(newest).is_some(), "keeps the newest");
+        assert!(runs.get(done).is_none(), "skips older finished runs");
+        let loaded = runs.get(waiting).expect("an older active run is listed");
         assert_eq!(loaded.steps[0].activity, "bash make");
         assert!(!loaded.stale());
+        std::thread::sleep(Duration::from_millis(5));
+        let resumed = RunState {
+            id: done.clone(),
+            status: RunStatus::Running,
+            ..RunState::default()
+        };
+        save(&root.join(done), &resumed);
+        runs.refresh(&root, 1);
+        assert!(
+            runs.get(done).is_some(),
+            "an older run that resumes is listed"
+        );
+        std::fs::remove_dir_all(root.join(newest)).unwrap();
+        runs.refresh(&root, 1);
+        assert!(runs.get(newest).is_none(), "a deleted run leaves the list");
+        runs.remove(done);
+        assert!(runs.find(&root, done).is_some(), "find reads a run by id");
+        let dir = root.join(waiting);
+        assert!(!runner_running(&dir, &state), "nothing holds the lock");
+        let held = lock_runner(&dir).unwrap().expect("the lock is free");
+        assert!(runner_running(&dir, &state));
+        assert!(lock_runner(&dir).unwrap().is_none(), "one runner at a time");
+        drop(held);
         state.heartbeat_ms = 1;
         assert!(state.stale());
         state.interrupt();
@@ -484,6 +639,23 @@ mod tests {
         assert_eq!(state.steps[0].status, StepStatus::Pending);
         assert!(state.steps[0].activity.is_empty());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runner_check_needs_the_run_id_in_the_command_line() {
+        let me = std::process::id();
+        let exe = std::env::current_exe().unwrap();
+        let name = exe.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(runner_alive(me, &name));
+        assert!(!runner_alive(me, "wf-not-this-process"));
+        assert!(!runner_alive(0, &name));
+    }
+
+    #[test]
+    fn parsed_state_has_one_state_per_step() {
+        let text = r#"{"id": "wf-1", "steps": [],
+            "workflow": {"name": "w", "steps": [{"name": "a", "tasks": [{"prompt": "p"}]}]}}"#;
+        assert_eq!(parse_state(text).unwrap().steps.len(), 1);
     }
 
     #[test]
