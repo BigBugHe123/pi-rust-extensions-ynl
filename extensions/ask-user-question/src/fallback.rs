@@ -11,6 +11,7 @@ const MULTI_SELECT_PLACEHOLDER: &str = "1,3; custom answer";
 const MAX_PREVIEW_CHARS: usize = 600;
 
 /// The two dialogs the walker needs; `Host` implements it, tests script it.
+#[allow(async_fn_in_trait)]
 pub trait Dialogs {
     async fn select(&self, title: &str, options: &[String]) -> Result<Option<String>>;
     async fn input(&self, title: &str, placeholder: &str) -> Result<Option<String>>;

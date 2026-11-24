@@ -965,6 +965,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pi-ext-plan-mode"
+version = "0.5.24"
+dependencies = [
+ "pi-ext-ask-user-question",
+ "pi-ext-e2e",
+ "pi-ext-sdk",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "pi-ext-rewind"
 version = "0.5.24"
 dependencies = [
@@ -1144,6 +1156,7 @@ dependencies = [
  "pi-ext-observational-memory",
  "pi-ext-ollama",
  "pi-ext-permissions",
+ "pi-ext-plan-mode",
  "pi-ext-rewind",
  "pi-ext-simple-goal",
  "pi-ext-ssh",

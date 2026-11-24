@@ -207,6 +207,20 @@
       ]
     },
     {
+      "name": "plan-mode",
+      "displayName": "Plan Mode",
+      "description": "Codex-like read-only /plan mode: explore, ask structured questions, and approve a complete plan before pi edits files.",
+      "version": "0.5.24",
+      "args": [
+        "plan-mode"
+      ],
+      "tags": [
+        "workflow",
+        "tui",
+        "tool"
+      ]
+    },
+    {
       "name": "rewind",
       "displayName": "Rewind",
       "description": "Per-turn shadow git checkpoints and conversation restoration.",

@@ -4,7 +4,7 @@ mod answer;
 pub mod channel;
 pub mod config;
 pub mod external;
-mod fallback;
+pub mod fallback;
 pub mod guidance;
 mod keys;
 mod layout;

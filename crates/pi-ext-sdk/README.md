@@ -1,6 +1,6 @@
 # pi-ext-sdk
 
-Created 2026-10-29. Last updated 2026-11-04.
+Created 2026-10-29. Last updated 2026-11-24.
 
 Rust SDK for pi-rust native extensions. pi starts the extension as a child process and talks JSON-RPC 2.0 with it, one JSON object per line on stdin and stdout. The protocol is in `docs/extensions/native-protocol.md` in the pi-rust repo (protocol version 1). The SDK runs the protocol loop. You register tools, commands, and event handlers, and you call pi through a `Host` handle.
 
@@ -51,7 +51,7 @@ pub fn main() -> ExitCode {
 | Method | Use |
 | --- | --- |
 | `Extension::new(name)` | Starts the builder. |
-| `.tool(ToolSpec, \|args: A, ctx: ToolCtx\| async { Ok(R) })` | Adds a tool. `A` is a serde type or `Value`. `R` is `ToolResult`, `String`, or `&str`. Bad arguments answer `-32602`. |
+| `.tool(ToolSpec, \|args: A, ctx: ToolCtx\| async { Ok(R) })` | Adds a tool. `A` is a serde type or `Value`. `R` is `ToolResult`, `String`, or `&str`. Bad arguments answer `-32602`. `ToolResult::terminate()` ends the agent loop after the tool batch when every result of the batch sets it. |
 | `.command(name, description, \|args: String, ctx: CommandCtx\| ...)` | Adds a slash command. `args` is the text after the name. |
 | `.completions(name, \|prefix, host\| ...)` | Adds argument completions to a command that you added before. |
 | `.shortcut(key, description, \|ctx: CommandCtx\| ...)` | Adds a shortcut such as `ctrl+shift+t`. |
