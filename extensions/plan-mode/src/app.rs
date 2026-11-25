@@ -74,8 +74,6 @@ pub struct Core {
     shutdown: bool,
     /// Levels plan-mode set whose `thinking_level_select` event has not arrived yet.
     thinking_echoes: Vec<String>,
-    /// `tools.getAll` and `tools.getActive` of the current model request.
-    tool_cache: Option<(Vec<ToolInfo>, Vec<String>)>,
     /// Warnings already shown in this workflow.
     warned: Vec<String>,
     /// The branch has `plan-mode-draft-contract` entries, so the `context` hook reads it.
@@ -106,7 +104,6 @@ impl Core {
 
     fn advance_workflow(&mut self) {
         self.draft.reset();
-        self.tool_cache = None;
         self.warned.clear();
         self.ready = None;
         self.finalization = None;
@@ -319,7 +316,6 @@ impl App {
             session_id: None,
             shutdown: false,
             thinking_echoes: Vec::new(),
-            tool_cache: None,
             warned: Vec::new(),
             draft_contracts: false,
             f2,
@@ -368,17 +364,7 @@ impl App {
             .active_tools()
             .await
             .unwrap_or_else(|_| DEFAULT_ACTIVE_TOOLS.map(String::from).to_vec());
-        self.lock().tool_cache = Some((tools.clone(), active.clone()));
         (tools, active)
-    }
-
-    /// The tools of the current model request; the `context` hook refreshes them.
-    pub async fn cached_tools(&self, host: &Host) -> (Vec<ToolInfo>, Vec<String>) {
-        let cached = self.lock().tool_cache.clone();
-        match cached {
-            Some(tools) => tools,
-            None => self.tools(host).await,
-        }
     }
 
     /// Shows `message` once per workflow for `key`.
@@ -746,20 +732,28 @@ impl App {
         }
     }
 
-    /// Warns when the model cannot see tools that the Plan policy allows.
+    /// Warns once per tool and workflow when the model cannot see a tool that the Plan policy allows.
     pub async fn warn_hidden(&self, host: &Host, tools: &[ToolInfo], active: &[String]) {
-        let allowed = self.lock().allowed.clone().unwrap_or_default();
-        let hidden: Vec<&str> = allowed
-            .iter()
-            .filter(|name| !active.contains(name))
-            .filter(|name| {
-                tools.iter().any(|t| {
-                    t.name == **name
-                        && matches!(t.exposure.as_deref(), None | Some("direct" | "model-only"))
+        let hidden: Vec<String> = {
+            let mut core = self.lock();
+            let hidden: Vec<String> = core
+                .allowed
+                .iter()
+                .flatten()
+                .filter(|name| !active.contains(name))
+                .filter(|name| !core.warned.contains(&format!("hidden:{name}")))
+                .filter(|name| {
+                    tools.iter().any(|t| {
+                        t.name == **name
+                            && matches!(t.exposure.as_deref(), None | Some("direct" | "model-only"))
+                    })
                 })
-            })
-            .map(String::as_str)
-            .collect();
+                .cloned()
+                .collect();
+            core.warned
+                .extend(hidden.iter().map(|name| format!("hidden:{name}")));
+            hidden
+        };
         let Some(first) = hidden.first() else { return };
         let them = it_or_them(hidden.len());
         let subject = if hidden.len() == 1 {
@@ -778,8 +772,7 @@ impl App {
         let message = format!(
             "The model cannot see {names}, which Plan mode allows: {subject} not active. {fix}"
         );
-        self.warn_once(host, &format!("hidden:{names}"), message)
-            .await;
+        self.warn(host, message).await;
     }
 
     /// Starts Plan mode with a first prompt, or sends a follow-up while active.

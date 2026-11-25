@@ -271,11 +271,13 @@ fn map_result(
         .collect()
 }
 
-/// Whether a submitted answer or note is over the upstream limit; the user must shorten it.
+/// Whether a typed answer or note is over the upstream limit; the user must shorten it.
+/// Like upstream, option labels do not count.
 fn too_long(result: &QuestionnaireResult) -> bool {
     !result.cancelled
         && result.answers.iter().any(|a| {
-            [a.answer.as_deref(), a.notes.as_deref()]
+            let typed = matches!(a.kind, AnswerKind::Custom).then_some(a.answer.as_deref());
+            [typed.flatten(), a.notes.as_deref()]
                 .into_iter()
                 .flatten()
                 .any(|text| text.encode_utf16().count() > MAX_RESPONSE)

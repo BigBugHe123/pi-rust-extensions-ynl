@@ -158,7 +158,7 @@ pub async fn tool_call(app: App, ev: EventCtx) -> Result<EventReply> {
         return Ok(EventReply::none());
     }
     if managed && (name == "write" || name == "edit") {
-        let (tools, active) = app.cached_tools(host).await;
+        let (tools, active) = app.tools(host).await;
         let native = tools.iter().any(|t| {
             t.name == name
                 && t.has_native_source()
@@ -192,7 +192,7 @@ pub async fn tool_call(app: App, ev: EventCtx) -> Result<EventReply> {
         _ if helper => return Ok(EventReply::none()),
         _ => {}
     }
-    let (tools, active) = app.cached_tools(host).await;
+    let (tools, active) = app.tools(host).await;
     let is_active = active.contains(&name);
     let Some(tool) = tools.iter().find(|t| t.name == name) else {
         return block(if is_active {

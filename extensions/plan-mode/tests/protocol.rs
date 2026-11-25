@@ -599,12 +599,31 @@ async fn allowed_tools_the_model_cannot_see_warn_once() {
     // After the policy froze with bash, something takes it out of the model's tools.
     host.active.retain(|name| name != "bash");
     host.event("context", context.clone()).await;
-    host.event("context", context).await;
+    host.event("context", context.clone()).await;
     assert_eq!(warnings_containing(&host, "The model cannot see bash"), 1);
     assert!(
         host.notices()
             .iter()
             .any(|n| n.contains("Turn it on in pi"))
+    );
+    // A second hidden tool warns about itself only.
+    host.active.retain(|name| name != "read");
+    host.event("context", context).await;
+    assert_eq!(warnings_containing(&host, "The model cannot see read,"), 1);
+    assert_eq!(warnings_containing(&host, "The model cannot see bash"), 1);
+}
+
+#[tokio::test]
+async fn tool_calls_check_the_tools_active_at_the_call() {
+    let (mut host, _work, _agent) = read_only("call-time").await;
+    host.command("start").await;
+    let context = json!({ "type": "context", "messages": [{ "role": "user", "content": "go" }] });
+    host.event("context", context).await;
+    host.active.retain(|name| name != "read");
+    let reply = host.tool_call("read", json!({ "path": "a.txt" })).await;
+    assert!(
+        blocked(&reply).is_some_and(|r| r.contains("'read'")),
+        "{reply}"
     );
 }
 
@@ -693,4 +712,26 @@ async fn answers_over_4000_characters_are_asked_again() {
         "{result}"
     );
     assert_eq!(warnings_containing(&host, "at most 4,000 characters"), 1);
+}
+
+#[tokio::test]
+async fn long_option_labels_do_not_count_toward_the_limit() {
+    let work = TestDir::new("label-work");
+    let agent = TestDir::new("label-agent");
+    let mut host = Host::start_mode(work.path(), agent.path(), Vec::new(), "rpc").await;
+    host.command("start").await;
+    let label = "y".repeat(4001);
+    host.selects.push_back(Some(format!("1. {label}")));
+    let question = json!({ "questions": [{ "id": "db", "header": "DB", "question": "Which database?",
+        "options": [
+            { "label": label, "description": "Long" },
+            { "label": "SQLite", "description": "Embedded" }
+        ] }] });
+    let result = host.tool("plan_mode_question", "q1", question).await;
+    assert_eq!(
+        result["details"]["answers"][0]["answer"],
+        label.as_str(),
+        "{result}"
+    );
+    assert_eq!(warnings_containing(&host, "at most 4,000 characters"), 0);
 }

@@ -51,7 +51,7 @@ Plan mode warns once per workflow when the agent cannot use the tools you expect
 - At the start, when tools from `/plan tools` or `defaultPlanTools` do not make the allowlist. The warning names each tool and why: not registered, inactive in pi, hidden in pi, or blocked by the Plan policy.
 - At the start, when the allowlist is empty and the agent cannot read the project.
 - At the first model request, when an allowed tool became unavailable before the allowlist froze.
-- Before a model request, when the model cannot see an allowed tool because it is not active, for example after the deferred extension listed it by name.
+- Before a model request, when the model cannot see an allowed tool because it is not active, for example after the deferred extension listed it by name. Each tool warns once.
 
 The Bash policy splits a command on `&&`, `||`, `;`, and `|` and checks each segment. It accepts inspection commands (`cat`, `rg`, `ls`, `jq`, and similar), read-only `git status`, `log`, `diff`, `show`, `branch`, `remote`, `ls-files`, and `grep`, `git -C` only for the working directory, and checks such as `npm test`, `cargo test`, and `tsc --noEmit`. It rejects redirects, substitutions, globs, variables, background jobs, in-place, output, and exec flags, and unknown commands. `node`, `python`, and the other runtimes pass only as `<command> --version`. The PowerShell policy accepts reviewed `Get-*`, `Select-String`, `Format-*`, and similar cmdlets plus the same `git` and `gh` queries, and rejects variables, script blocks, redirects, aliases, and multiline input. A blocked call names its first blocked segment.
 
@@ -59,7 +59,7 @@ The Bash policy splits a command on `&&`, `||`, `;`, and `|` and checks each seg
 
 ## Questionnaires and free discussion
 
-A new workflow asks questions with `plan_mode_question`. In `tui` mode the questions show in the questionnaire panel of the [ask-user-question](../ask-user-question/README.md) extension, with its keys and its `collapseKey` and `notesKey` settings. In `rpc` mode, or when pi cannot show a panel, each question is a `ui.select` dialog with a `Type something.` row. Answers and notes can have at most 4,000 characters: a longer one warns, and the questions stay open until it fits.
+A new workflow asks questions with `plan_mode_question`. In `tui` mode the questions show in the questionnaire panel of the [ask-user-question](../ask-user-question/README.md) extension, with its keys and its `collapseKey` and `notesKey` settings. In `rpc` mode, or when pi cannot show a panel, each question is a `ui.select` dialog with a `Type something.` row. Typed answers and notes can have at most 4,000 characters: a longer one warns, and the questions stay open until it fits. Option labels do not count.
 
 F2 switches between questionnaires and free discussion, from the idle editor or from an open questionnaire. Switching from a questionnaire closes it without answers, stops the run, and returns `discussion_requested`. In free discussion the agent asks plain-text questions, and `plan_mode_question` returns `questions_paused`. The `/plan` menu has the same switch. F2 is not registered when `keybindings.json` binds F2 or `toggleShortcut` is `f2`. A hidden `plan-mode-interaction` message tells the model the current mode.
 
