@@ -34,6 +34,7 @@ const EXTENSIONS: &[Extension] = &[
     ("workflows", pi_ext_workflows::main),
     ("simple-goal", pi_ext_simple_goal::main),
     ("timers", pi_ext_timers::main),
+    ("plan-mode", pi_ext_plan_mode::main),
 ];
 
 fn main() -> ExitCode {

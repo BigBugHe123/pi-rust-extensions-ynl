@@ -1,0 +1,22 @@
+[package]
+name = "pi-ext-plan-mode"
+description = "Codex-like read-only /plan mode: explore, ask, and approve a plan before pi edits files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pi-ext-sdk = { path = "../../crates/pi-ext-sdk" }
+pi-ext-ask-user-question = { path = "../ask-user-question" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+pi-ext-e2e = { path = "../../crates/pi-ext-e2e" }
+
+[lints]
+workspace = true
