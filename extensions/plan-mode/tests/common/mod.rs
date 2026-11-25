@@ -36,7 +36,7 @@ impl Drop for TestDir {
     }
 }
 
-fn tool(name: &str) -> Value {
+pub fn tool(name: &str) -> Value {
     json!({ "name": name, "description": name, "exposure": "direct",
         "sourceInfo": { "source": "builtin", "path": format!("builtin:{name}") } })
 }
@@ -198,6 +198,22 @@ impl Host {
             "session.getBranch" => Value::Array(self.branch.clone()),
             "tools.getAll" => Value::Array(self.tools.clone()),
             "tools.getActive" => json!(self.active),
+            "tools.setActive" => {
+                // pi keeps only registered names.
+                let registered: Vec<&str> = self
+                    .tools
+                    .iter()
+                    .filter_map(|t| t["name"].as_str())
+                    .collect();
+                let names = params["names"].as_array().cloned().unwrap_or_default();
+                self.active = names
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|n| registered.contains(n))
+                    .map(str::to_owned)
+                    .collect();
+                Value::Null
+            }
             "ctx.isIdle" => json!(self.idle),
             "thinking.get" => json!(self.thinking),
             "thinking.set" => {

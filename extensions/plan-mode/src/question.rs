@@ -13,6 +13,10 @@ use serde_json::{Value, json};
 
 pub const QUESTION_TOOL: &str = "plan_mode_question";
 const PANEL_WIDTH: usize = 80;
+/// Upstream `MAX_PLAN_MODE_RESPONSE_LENGTH`, in JavaScript characters.
+const MAX_RESPONSE: usize = 4_000;
+const TOO_LONG: &str =
+    "Answers and notes can have at most 4,000 characters. Shorten the long one, then submit again.";
 const F2_INPUTS: [&str; 6] = [
     "\x1bOQ",
     "\x1b[12~",
@@ -267,6 +271,28 @@ fn map_result(
         .collect()
 }
 
+/// Whether a submitted answer or note is over the upstream limit; the user must shorten it.
+fn too_long(result: &QuestionnaireResult) -> bool {
+    !result.cancelled
+        && result.answers.iter().any(|a| {
+            [a.answer.as_deref(), a.notes.as_deref()]
+                .into_iter()
+                .flatten()
+                .any(|text| text.encode_utf16().count() > MAX_RESPONSE)
+        })
+}
+
+/// The dialog walker, asked again while an answer is too long.
+async fn walk(host: &Host, shown: &[Question]) -> Result<QuestionnaireResult> {
+    loop {
+        let result = fallback::walk(host, shown).await?;
+        if !too_long(&result) {
+            return Ok(result);
+        }
+        let _ = host.notify_warning(TOO_LONG).await;
+    }
+}
+
 /// How a questionnaire ended.
 pub enum Asked {
     Answered(Vec<PlanAnswer>),
@@ -291,12 +317,12 @@ pub async fn ask(
 ) -> Result<Asked> {
     let shown = questionnaire_questions(questions);
     let result = if rpc {
-        fallback::walk(host, &shown).await?
+        walk(host, &shown).await?
     } else {
         match panel(host, cancel, &shown, f2).await? {
             PanelOutcome::Done(result) => result,
             PanelOutcome::Discussion => return Ok(Asked::Discussion),
-            PanelOutcome::NoPanel => fallback::walk(host, &shown).await?,
+            PanelOutcome::NoPanel => walk(host, &shown).await?,
         }
     };
     Ok(match map_result(questions, &shown, &result) {
@@ -347,6 +373,12 @@ async fn panel(
             PanelEvent::Closed => Some(state.done(true)),
         };
         match effect {
+            // The panel stays open so the user can shorten the answer or note.
+            Some(Effect::Done(result))
+                if too_long(&result) && !matches!(event, PanelEvent::Closed) =>
+            {
+                let _ = host.notify_warning(TOO_LONG).await;
+            }
             Some(Effect::Done(result)) => {
                 if !matches!(event, PanelEvent::Closed) {
                     panel.close(Value::Null).await?;

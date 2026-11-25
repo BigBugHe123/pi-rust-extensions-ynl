@@ -24,9 +24,10 @@ use crate::state::{
 };
 use crate::ui;
 
-pub const PLAN_ENABLED: &str =
+const PLAN_ENABLED: &str =
     "Plan mode enabled. Project files remain read-only; a managed draft may be available.";
 const DEFAULT_ACTIVE_TOOLS: [&str; 4] = ["read", "bash", "edit", "write"];
+const DEFERRED_SEARCH: &str = "deferred_search";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PolicyStep {
@@ -73,6 +74,12 @@ pub struct Core {
     shutdown: bool,
     /// Levels plan-mode set whose `thinking_level_select` event has not arrived yet.
     thinking_echoes: Vec<String>,
+    /// `tools.getAll` and `tools.getActive` of the current model request.
+    tool_cache: Option<(Vec<ToolInfo>, Vec<String>)>,
+    /// Warnings already shown in this workflow.
+    warned: Vec<String>,
+    /// The branch has `plan-mode-draft-contract` entries, so the `context` hook reads it.
+    pub draft_contracts: bool,
     /// F2 toggles questionnaires; registered at load when no pi keybinding uses it.
     pub f2: bool,
     /// The toggle shortcut registered at load.
@@ -99,6 +106,8 @@ impl Core {
 
     fn advance_workflow(&mut self) {
         self.draft.reset();
+        self.tool_cache = None;
+        self.warned.clear();
         self.ready = None;
         self.finalization = None;
         self.pending_policy = None;
@@ -256,6 +265,23 @@ fn resolve_names(tools: &[ToolInfo], active: &[String], desired: &[String]) -> V
         .collect()
 }
 
+/// Why `name` cannot join the Plan allowlist.
+fn unavailable_reason(tools: &[ToolInfo], active: &[String], name: &str) -> &'static str {
+    match tools.iter().find(|t| t.name == name) {
+        None => "not registered",
+        Some(tool) if !tool.selectable() => "blocked by the Plan policy",
+        Some(tool) => match tool.availability(active, Route::Selection) {
+            Availability::Hidden => "hidden in pi",
+            Availability::Unsupported => "unsupported exposure",
+            _ => "inactive in pi",
+        },
+    }
+}
+
+fn it_or_them(count: usize) -> &'static str {
+    if count == 1 { "it" } else { "them" }
+}
+
 pub fn helpers_available(active: &[String]) -> bool {
     [QUESTION_TOOL, COMPLETE_TOOL]
         .iter()
@@ -293,6 +319,9 @@ impl App {
             session_id: None,
             shutdown: false,
             thinking_echoes: Vec::new(),
+            tool_cache: None,
+            warned: Vec::new(),
+            draft_contracts: false,
             f2,
             toggle_shortcut,
         };
@@ -328,7 +357,7 @@ impl App {
     }
 
     pub async fn tools(&self, host: &Host) -> (Vec<ToolInfo>, Vec<String>) {
-        let tools = host
+        let tools: Vec<ToolInfo> = host
             .all_tools()
             .await
             .unwrap_or_default()
@@ -339,7 +368,62 @@ impl App {
             .active_tools()
             .await
             .unwrap_or_else(|_| DEFAULT_ACTIVE_TOOLS.map(String::from).to_vec());
+        self.lock().tool_cache = Some((tools.clone(), active.clone()));
         (tools, active)
+    }
+
+    /// The tools of the current model request; the `context` hook refreshes them.
+    pub async fn cached_tools(&self, host: &Host) -> (Vec<ToolInfo>, Vec<String>) {
+        let cached = self.lock().tool_cache.clone();
+        match cached {
+            Some(tools) => tools,
+            None => self.tools(host).await,
+        }
+    }
+
+    /// Shows `message` once per workflow for `key`.
+    pub async fn warn_once(&self, host: &Host, key: &str, message: impl Into<String>) {
+        {
+            let mut core = self.lock();
+            if core.warned.iter().any(|k| k == key) {
+                return;
+            }
+            core.warned.push(key.to_owned());
+        }
+        self.warn(host, message).await;
+    }
+
+    /// Turns the Plan tools back on when something took them out of the active tools, for example
+    /// the deferred extension's `auto` mode. Returns the active tools afterwards, and whether it
+    /// changed them.
+    pub async fn ensure_helpers(&self, host: &Host, active: Vec<String>) -> (Vec<String>, bool) {
+        if helpers_available(&active) {
+            return (active, false);
+        }
+        let mut names = active;
+        for helper in [QUESTION_TOOL, COMPLETE_TOOL] {
+            if !names.iter().any(|n| n == helper) {
+                names.push(helper.to_owned());
+            }
+        }
+        let _ = host.set_active_tools(&names).await;
+        let (_, active) = self.tools(host).await;
+        let changed = helpers_available(&active);
+        (active, changed)
+    }
+
+    /// Tells the user that the Plan tools were hidden and turned back on.
+    pub async fn warn_helpers_restored(&self, host: &Host, tools: &[ToolInfo]) {
+        let deferred = tools.iter().any(|t| t.name == DEFERRED_SEARCH);
+        let fix = if deferred {
+            "The deferred extension lists tools by name only in its auto mode or with a names rule. To keep these two listed, add the rule \"plan_mode_*\": \"on\" to its tools."
+        } else {
+            "Check the tool settings of other extensions if this happens again."
+        };
+        let message = format!(
+            "plan_mode_question and plan_mode_complete were hidden from the model, so Plan mode turned them back on. {fix}"
+        );
+        self.warn_once(host, "helpers", message).await;
     }
 
     pub async fn persist(&self, host: &Host) -> Result<()> {
@@ -561,7 +645,8 @@ impl App {
         }
     }
 
-    /// Starts a workflow. `selected` is a `/plan tools` choice; `None` keeps the stored one.
+    /// Starts a workflow and says so, then warns about tools. `selected` is a `/plan tools`
+    /// choice; `None` keeps the stored one.
     pub async fn enter(&self, host: &Host, selected: Option<Vec<String>>) -> Result<bool> {
         if self.lock().state.enabled {
             return Ok(true);
@@ -571,6 +656,7 @@ impl App {
         }
         self.refresh_settings();
         let (tools, active) = self.tools(host).await;
+        let (active, restored) = self.ensure_helpers(host, active).await;
         if !helpers_available(&active) {
             let message = "Cannot start Plan mode: plan_mode_question and plan_mode_complete are unavailable; include them in the active tool allowlist or leave the restrictive tool mode before starting Plan mode.";
             self.report(host, message, true).await?;
@@ -579,6 +665,7 @@ impl App {
         if !self.publish_mode(host, Mode::Plan).await? {
             return Ok(false);
         }
+        let explicit_choice = selected.is_some();
         {
             let mut core = self.lock();
             core.advance_workflow();
@@ -612,7 +699,87 @@ impl App {
         self.publish_interaction(host, Interaction::Questions)
             .await?;
         self.update_ui(host).await;
+        let notice = if explicit_choice {
+            "Plan mode enabled with the selected tools."
+        } else {
+            PLAN_ENABLED
+        };
+        self.notify(host, notice).await;
+        if restored {
+            self.warn_helpers_restored(host, &tools).await;
+        }
+        self.warn_unresolved(host, &tools, &active).await;
         Ok(true)
+    }
+
+    /// Warns when selected tools did not make the allowlist, or when it is empty.
+    async fn warn_unresolved(&self, host: &Host, tools: &[ToolInfo], active: &[String]) {
+        let (desired, allowed) = {
+            let core = self.lock();
+            let desired = core
+                .state
+                .workflow_tool_policy
+                .as_ref()
+                .and_then(|p| p.desired_names.clone())
+                .unwrap_or_default();
+            (desired, core.allowed.clone().unwrap_or_default())
+        };
+        let missing: Vec<String> = desired
+            .iter()
+            .filter(|name| !allowed.contains(name))
+            .map(|name| {
+                let reason = unavailable_reason(tools, active, name);
+                format!("{} ({reason})", ui::safe_text(name))
+            })
+            .collect();
+        if !missing.is_empty() {
+            let message = format!(
+                "Plan mode will not allow {}. Plan mode does not register or turn on these tools; make {} available in pi, then start a new Plan workflow.",
+                missing.join(", "),
+                it_or_them(missing.len())
+            );
+            self.warn_once(host, "unresolved", message).await;
+        }
+        if allowed.is_empty() {
+            let message = "Plan mode allows no tools, so the agent cannot read the project. Turn on read or bash in pi, or choose tools with /plan tools.";
+            self.warn_once(host, "empty", message).await;
+        }
+    }
+
+    /// Warns when the model cannot see tools that the Plan policy allows.
+    pub async fn warn_hidden(&self, host: &Host, tools: &[ToolInfo], active: &[String]) {
+        let allowed = self.lock().allowed.clone().unwrap_or_default();
+        let hidden: Vec<&str> = allowed
+            .iter()
+            .filter(|name| !active.contains(name))
+            .filter(|name| {
+                tools.iter().any(|t| {
+                    t.name == **name
+                        && matches!(t.exposure.as_deref(), None | Some("direct" | "model-only"))
+                })
+            })
+            .map(String::as_str)
+            .collect();
+        let Some(first) = hidden.first() else { return };
+        let them = it_or_them(hidden.len());
+        let subject = if hidden.len() == 1 {
+            "it is"
+        } else {
+            "they are"
+        };
+        let fix = if tools.iter().any(|t| t.name == DEFERRED_SEARCH) {
+            format!(
+                "If the deferred extension lists {them} by name, add rules such as \"{first}\": \"on\" to its tools, or allow deferred_search with /plan tools."
+            )
+        } else {
+            format!("Turn {them} on in pi to use {them} in this workflow.")
+        };
+        let names = ui::safe_text(&hidden.join(", "));
+        let message = format!(
+            "The model cannot see {names}, which Plan mode allows: {subject} not active. {fix}"
+        );
+        self.warn_once(host, &format!("hidden:{names}"), message)
+            .await;
     }
 
     /// Starts Plan mode with a first prompt, or sends a follow-up while active.
@@ -620,9 +787,6 @@ impl App {
         let was_enabled = self.lock().state.enabled;
         if !self.enter(host, None).await? {
             return Ok(());
-        }
-        if !was_enabled {
-            self.notify(host, PLAN_ENABLED).await;
         }
         if !self.send_user(host, prompt).await && !was_enabled {
             self.exit(host).await?;
@@ -679,10 +843,7 @@ impl App {
         if saved {
             return self.saved_plan_blocks(host).await;
         }
-        if self.enter(host, None).await? {
-            self.notify(host, PLAN_ENABLED).await;
-        }
-        Ok(())
+        self.enter(host, None).await.map(drop)
     }
 
     pub async fn saved_plan_blocks(&self, host: &Host) -> Result<()> {
@@ -1206,11 +1367,12 @@ impl App {
         };
         let Some(step) = pending else { return Ok(()) };
         let (tools, active) = self.tools(host).await;
-        let changed = {
+        let (changed, dropped) = {
             let mut core = self.lock();
             let Some(policy) = core.state.workflow_tool_policy.clone() else {
                 return Ok(());
             };
+            let previous = core.allowed.clone().unwrap_or_default();
             let allowed = match step {
                 PolicyStep::Resolve => resolve_names(
                     &tools,
@@ -1220,6 +1382,17 @@ impl App {
                 PolicyStep::Revalidate => core.revalidate(&policy, &tools, &active),
             };
             let changed = !policy.resolved || policy.allowed_names != allowed;
+            let dropped: Vec<String> = previous
+                .into_iter()
+                .filter(|name| !allowed.contains(name))
+                .map(|name| {
+                    format!(
+                        "{} ({})",
+                        ui::safe_text(&name),
+                        unavailable_reason(&tools, &active, &name)
+                    )
+                })
+                .collect();
             core.allowed = Some(allowed.clone());
             core.state.workflow_tool_policy = Some(ToolPolicy {
                 allowed_names: allowed,
@@ -1227,12 +1400,24 @@ impl App {
                 ..policy
             });
             core.pending_policy = None;
-            changed
+            (changed, dropped)
         };
         if changed {
             self.persist(host).await?;
         }
         self.update_ui(host).await;
+        if !dropped.is_empty() {
+            let (it, was) = if dropped.len() == 1 {
+                ("it", "it was")
+            } else {
+                ("them", "they were")
+            };
+            let message = format!(
+                "Plan mode will not allow {} in this workflow, because {was} unavailable when the first request froze the tool policy. Make {it} available in pi, then start a new Plan workflow.",
+                dropped.join(", ")
+            );
+            self.warn_once(host, "dropped", message).await;
+        }
         Ok(())
     }
 
@@ -1299,6 +1484,11 @@ impl App {
     pub async fn install_restored(&self, host: &Host, candidate: PlanState) -> Result<bool> {
         let was_enabled = self.lock().state.enabled;
         let (tools, active) = self.tools(host).await;
+        let (active, restored) = if candidate.enabled {
+            self.ensure_helpers(host, active).await
+        } else {
+            (active, false)
+        };
         if candidate.enabled && !helpers_available(&active) {
             {
                 let mut core = self.lock();
@@ -1333,11 +1523,16 @@ impl App {
         }
         if self.lock().state.enabled {
             self.apply_plan_thinking(host).await;
-            let mut core = self.lock();
-            if core.managed_draft()
-                && let Some(identity) = core.state.draft.clone()
             {
-                core.draft.bind(&self.agent_dir, &identity);
+                let mut core = self.lock();
+                if core.managed_draft()
+                    && let Some(identity) = core.state.draft.clone()
+                {
+                    core.draft.bind(&self.agent_dir, &identity);
+                }
+            }
+            if restored {
+                self.warn_helpers_restored(host, &tools).await;
             }
         }
         Ok(true)
@@ -1351,6 +1546,9 @@ impl App {
             let mut core = self.lock();
             core.persisted = serde_json::to_string(&restored).ok();
             core.published = crate::contracts::latest_mode_contract(&branch).map(|(_, mode)| mode);
+            core.draft_contracts = branch
+                .iter()
+                .any(|e| crate::draft::parse_entry(e).is_some());
             core.contracts_relevant = crate::contracts::has_mode_contract_artifact(&branch)
                 || restored.enabled
                 || restored.saved_plan.is_some()

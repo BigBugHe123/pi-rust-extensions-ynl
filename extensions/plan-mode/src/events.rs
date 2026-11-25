@@ -158,7 +158,7 @@ pub async fn tool_call(app: App, ev: EventCtx) -> Result<EventReply> {
         return Ok(EventReply::none());
     }
     if managed && (name == "write" || name == "edit") {
-        let (tools, active) = app.tools(host).await;
+        let (tools, active) = app.cached_tools(host).await;
         let native = tools.iter().any(|t| {
             t.name == name
                 && t.has_native_source()
@@ -192,7 +192,7 @@ pub async fn tool_call(app: App, ev: EventCtx) -> Result<EventReply> {
         _ if helper => return Ok(EventReply::none()),
         _ => {}
     }
-    let (tools, active) = app.tools(host).await;
+    let (tools, active) = app.cached_tools(host).await;
     let is_active = active.contains(&name);
     let Some(tool) = tools.iter().find(|t| t.name == name) else {
         return block(if is_active {
@@ -309,23 +309,41 @@ fn draft_authorization(app: &App, branch: &[Value], state: &PlanState) -> Option
     })
 }
 
+/// Before each model request in Plan mode: turns the Plan tools back on when something hid
+/// them, and warns about allowed tools the model cannot see. Refreshes the tool cache.
+async fn check_tools(app: &App, host: &pi_ext_sdk::Host) {
+    let (tools, active) = app.tools(host).await;
+    let (active, restored) = app.ensure_helpers(host, active).await;
+    if restored {
+        app.warn_helpers_restored(host, &tools).await;
+    }
+    app.warn_hidden(host, &tools, &active).await;
+}
+
 pub async fn context(app: App, ev: EventCtx) -> Result<EventReply> {
     let host = ev.host();
     app.resolve_pending_policy(host).await?;
     app.resolve_draft_admission(host).await?;
-    let (state, relevant) = {
+    let (state, relevant, draft_contracts) = {
         let core = app.lock();
-        (core.state.clone(), core.contracts_relevant)
+        (
+            core.state.clone(),
+            core.contracts_relevant,
+            core.draft_contracts,
+        )
     };
+    if state.enabled {
+        check_tools(&app, host).await;
+    }
     if !state.enabled && !relevant && state.active_implementation.is_none() {
         return Ok(EventReply::none());
     }
-    let messages = ev
+    let original = ev
         .get("messages")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let (messages, clear) = app.lock().retention.transform(messages, &state);
+    let (messages, clear) = app.lock().retention.transform(original.clone(), &state);
     if let Some(id) = clear {
         app.clear_active_implementation(host, &id).await?;
     }
@@ -342,11 +360,20 @@ pub async fn context(app: App, ev: EventCtx) -> Result<EventReply> {
         app.lock().state.interaction_restorations.push(anchor);
         app.persist(host).await?;
     }
-    let branch = host.branch(None).await?;
+    // Only a branch with draft contract entries has contracts to put back.
+    let branch = if draft_contracts {
+        host.branch(None).await?
+    } else {
+        Vec::new()
+    };
     let expected = draft_authorization(&app, &branch, &state);
     let (messages, entry) = draft::reconcile(messages, &branch, expected.as_ref());
     if let Some(entry) = entry {
         host.append_entry(draft::CONTRACT_ENTRY, &entry).await?;
+        app.lock().draft_contracts = true;
+    }
+    if messages == original {
+        return Ok(EventReply::none());
     }
     Ok(EventReply::result(json!({ "messages": messages })))
 }
@@ -435,6 +462,12 @@ pub async fn agent_settled(app: App, ev: EventCtx) -> Result<()> {
 }
 
 pub async fn before_agent_start(app: App, ev: EventCtx) -> Result<()> {
+    if app.lock().state.enabled {
+        let (tools, active) = app.tools(ev.host()).await;
+        if app.ensure_helpers(ev.host(), active).await.1 {
+            app.warn_helpers_restored(ev.host(), &tools).await;
+        }
+    }
     if text(&ev, "messageType") == "custom" {
         return Ok(());
     }

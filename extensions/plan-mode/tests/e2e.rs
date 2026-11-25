@@ -125,3 +125,44 @@ fn helpers_are_rejected_outside_plan_mode() {
     let first = output.requests[0].to_string();
     assert!(!first.contains("PI PLAN MODE CONTRACT"), "{first}");
 }
+
+#[test]
+fn deferred_cannot_hide_the_plan_tools() {
+    if pi_bin_or_skip().is_none() {
+        return;
+    }
+    let binary = cargo_bin("pi-rust-ext", "pi-rust-ext");
+    let native = json!({ "command": binary, "args": ["deferred"] });
+    let deferred = json!({ "name": "deferred", "pi": { "native": [native] } });
+    let output = Run::new(binary)
+        .args(["plan-mode"])
+        .file("agent/deferred/package.json", deferred.to_string())
+        .file(
+            "agent/ext/deferred.json",
+            r#"{ "tools": { "plan_mode_*": "names" } }"#,
+        )
+        .file(
+            "agent/ext/plan-mode.json",
+            r#"{ "defaultPlanTools": ["read", "bash"] }"#,
+        )
+        .settings(json!({ "packages": ["../pkg", "deferred"] }))
+        .turns([
+            Turn::tool_call("bash", json!({ "command": "ls" })),
+            Turn::tool_call("plan_mode_complete", json!({ "plan": PLAN })),
+            Turn::text("unused"),
+        ])
+        .prompt("/plan Add a --flag option")
+        .run()
+        .unwrap();
+    assert!(output.status.success(), "{}", output.stderr);
+    let completed = output
+        .tool_result_text("plan_mode_complete")
+        .unwrap_or_default();
+    assert_eq!(completed, format!("**Proposed Plan**\n\n{PLAN}"));
+    let last = output.requests.last().unwrap().to_string();
+    assert!(
+        last.contains("deferred_search"),
+        "deferred is loaded: {last}"
+    );
+    assert!(last.contains("plan_mode_complete"), "{last}");
+}

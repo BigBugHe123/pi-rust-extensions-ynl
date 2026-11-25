@@ -3,7 +3,7 @@
 
 use pi_ext_sdk::{CommandCtx, CompletionItem, Error, Host, Result};
 
-use crate::app::{App, PLAN_ENABLED, ReadyIntent, helpers_available, selectable_tools};
+use crate::app::{App, ReadyIntent, helpers_available, selectable_tools};
 use crate::contracts::Interaction;
 use crate::fresh::{self, Runtime};
 use crate::policy::{Availability, Route, ToolInfo};
@@ -122,8 +122,8 @@ pub async fn run(app: App, args: String, ctx: CommandCtx) -> Result<()> {
             }
             if enabled {
                 app.notify(&host, "Plan mode is already active.").await;
-            } else if app.enter(&host, None).await? {
-                app.notify(&host, PLAN_ENABLED).await;
+            } else {
+                app.enter(&host, None).await?;
             }
         }
         "show" => show(&app, &host).await?,
@@ -308,12 +308,7 @@ async fn launch_menu(app: &App, host: &Host) -> Result<()> {
             item("help", "How Plan mode works"),
         ];
         match choose(host, &title, &items).await? {
-            Some("start") => {
-                if app.enter(host, None).await? {
-                    app.notify(host, PLAN_ENABLED).await;
-                }
-                return Ok(());
-            }
+            Some("start") => return app.enter(host, None).await.map(drop),
             Some("tools") => return choose_tools_then_start(app, host).await,
             Some("settings") => settings_ui::show(app, host).await?,
             Some("help") => {
@@ -375,11 +370,7 @@ async fn choose_tools_then_start(app: &App, host: &Host) -> Result<()> {
     let Some(Picked::Names(names)) = picked else {
         return Ok(());
     };
-    if app.enter(host, Some(names)).await? {
-        app.notify(host, "Plan mode enabled with the selected tools.")
-            .await;
-    }
-    Ok(())
+    app.enter(host, Some(names)).await.map(drop)
 }
 
 pub enum Picked {
@@ -642,12 +633,7 @@ async fn active_menu(app: &App, host: &Host) -> Result<()> {
                 }
             }
             Some("settings") => settings_ui::show(app, host).await?,
-            Some("new") => {
-                if app.enter(host, None).await? {
-                    app.notify(host, PLAN_ENABLED).await;
-                }
-                return Ok(());
-            }
+            Some("new") => return app.enter(host, None).await.map(drop),
             Some("clear") => {
                 if app.exit(host).await? {
                     app.notify(host, "Active implementation plan cleared.")

@@ -31,7 +31,9 @@ The status key `plan-mode` shows `plan active`, `plan discussion`, `plan ready`,
 | `plan_mode_question` | `questions` (1 to 3), each `{ id, header, question, options }` with 2 to 4 options `{ label, description }` | Shows the questions and returns `{ cancelled, answers }`. Each answer is `{ id, header, question, answer, wasCustom, optionIndex?, note? }`. A cancelled call has `reason`: `cancelled`, `ui_unavailable`, `plan_mode_inactive`, `invalid_input`, `discussion_requested`, or `questions_paused`. |
 | `plan_mode_complete` | `plan` (read-only workflows), or `{}` with a managed draft | Stores the plan (at most 50,000 characters), shows `**Proposed Plan**`, and ends the run (`terminate: true`). |
 
-Both tools stay registered in Normal mode, but they and the `tool_call` policy reject calls unless Plan mode is active. Plan mode needs both tools in the active tool list: it does not start, and a restored workflow does not resume, when another tool policy hides them. With the [deferred](../deferred/README.md) extension, its `auto` mode can turn them into names; keep them declared with the rule `"tools": { "plan_mode_*": "on" }`.
+Both tools stay registered in Normal mode, but they and the `tool_call` policy reject calls unless Plan mode is active.
+
+The model can only call the two tools while they are in the active tool list. When another extension takes them out, Plan mode turns them back on when it starts or restores a workflow, before each run, and before each model request, and warns once per workflow. The [deferred](../deferred/README.md) extension does this in its `auto` mode or with a `names` rule; add the rule `"tools": { "plan_mode_*": "on" }` to keep them listed. A change before a model request applies from the next turn, so when deferred runs after plan-mode the first request of a run can miss them. When pi cannot turn them on, Plan mode does not start, and a restored workflow does not resume.
 
 ## Tool policy
 
@@ -39,10 +41,17 @@ While Plan mode is active, the `tool_call` handler blocks:
 
 - `edit`, `write`, and `update_plan`. With a managed draft, direct native `write` and `edit` calls on the draft path are allowed.
 - Tools outside the workflow allowlist. By default the allowlist is the active safe built-ins: `read`, `bash`, `powershell`, `grep`, `find`, and `ls`. MCP tools, `codemode`, and extension tools need an explicit opt-in with `/plan tools` or `defaultPlanTools`. Allowing an orchestrator does not allow the tools it calls; every nested call is checked.
-- Tools that are inactive, hidden, or model-only on a nested call. Plan mode never activates a tool.
+- Tools that are inactive, hidden, or model-only on a nested call. Plan mode activates no tools other than its own two.
 - `bash` and `powershell` commands outside the reviewed inspection policy.
 
 The allowlist freezes at the first model request of the workflow and restores with it after reload, resume, and `/tree`. A tool that registers later waits for the next workflow.
+
+Plan mode warns once per workflow when the agent cannot use the tools you expect:
+
+- At the start, when tools from `/plan tools` or `defaultPlanTools` do not make the allowlist. The warning names each tool and why: not registered, inactive in pi, hidden in pi, or blocked by the Plan policy.
+- At the start, when the allowlist is empty and the agent cannot read the project.
+- At the first model request, when an allowed tool became unavailable before the allowlist froze.
+- Before a model request, when the model cannot see an allowed tool because it is not active, for example after the deferred extension listed it by name.
 
 The Bash policy splits a command on `&&`, `||`, `;`, and `|` and checks each segment. It accepts inspection commands (`cat`, `rg`, `ls`, `jq`, and similar), read-only `git status`, `log`, `diff`, `show`, `branch`, `remote`, `ls-files`, and `grep`, `git -C` only for the working directory, and checks such as `npm test`, `cargo test`, and `tsc --noEmit`. It rejects redirects, substitutions, globs, variables, background jobs, in-place, output, and exec flags, and unknown commands. `node`, `python`, and the other runtimes pass only as `<command> --version`. The PowerShell policy accepts reviewed `Get-*`, `Select-String`, `Format-*`, and similar cmdlets plus the same `git` and `gh` queries, and rejects variables, script blocks, redirects, aliases, and multiline input. A blocked call names its first blocked segment.
 
@@ -50,7 +59,7 @@ The Bash policy splits a command on `&&`, `||`, `;`, and `|` and checks each seg
 
 ## Questionnaires and free discussion
 
-A new workflow asks questions with `plan_mode_question`. In `tui` mode the questions show in the questionnaire panel of the [ask-user-question](../ask-user-question/README.md) extension, with its keys and its `collapseKey` and `notesKey` settings. In `rpc` mode, or when pi cannot show a panel, each question is a `ui.select` dialog with a `Type something.` row.
+A new workflow asks questions with `plan_mode_question`. In `tui` mode the questions show in the questionnaire panel of the [ask-user-question](../ask-user-question/README.md) extension, with its keys and its `collapseKey` and `notesKey` settings. In `rpc` mode, or when pi cannot show a panel, each question is a `ui.select` dialog with a `Type something.` row. Answers and notes can have at most 4,000 characters: a longer one warns, and the questions stay open until it fits.
 
 F2 switches between questionnaires and free discussion, from the idle editor or from an open questionnaire. Switching from a questionnaire closes it without answers, stops the run, and returns `discussion_requested`. In free discussion the agent asks plain-text questions, and `plan_mode_question` returns `questions_paused`. The `/plan` menu has the same switch. F2 is not registered when `keybindings.json` binds F2 or `toggleShortcut` is `f2`. A hidden `plan-mode-interaction` message tells the model the current mode.
 
@@ -120,5 +129,6 @@ The `context` hook puts a mode or interaction contract back at a fixed place aft
 - Boundaries use FNV-1a hashes. Boundaries from upstream sessions do not match, so their contracts are anchored again.
 - The settings file is `ext/plan-mode.json`, and the draft directory is under `extensions-data/plan-mode`.
 - The Bash policy is stricter. Upstream allows `python3 -c <code> --version`, `fd -Hx <command>`, `git grep -O<command>`, `sed` scripts in `-e` clusters, and `sort -uo <file>`; this port blocks them.
-- Questionnaire answers and notes have no 4,000-character limit.
+- Plan mode turns its own two tools back on when another extension hides them. Upstream does not start, or does not restore the workflow.
+- The warnings about tools the agent cannot use (see Tool policy) are new.
 - pi-rust reports a busy session while `agent_settled` handlers run, so the finalization retry and the ready menu do not wait for idle there.

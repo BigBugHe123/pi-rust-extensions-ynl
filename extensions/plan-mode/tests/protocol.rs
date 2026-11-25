@@ -530,7 +530,10 @@ async fn an_unrestored_workflow_survives_shutdown() {
         "enabled": true, "awaitingAction": true, "latestPlan": PLAN, "latestPlanSource": "plan_mode_complete"
     }});
     let mut host = Host::start(work.path(), agent.path(), vec![state]).await;
+    // Not registered: pi cannot turn them back on.
     host.active.retain(|name| !name.starts_with("plan_mode_"));
+    host.tools
+        .retain(|t| !t["name"].as_str().unwrap().starts_with("plan_mode_"));
     host.event("session_tree", json!({ "type": "session_tree" }))
         .await;
     assert!(
@@ -545,4 +548,149 @@ async fn an_unrestored_workflow_survives_shutdown() {
         PLAN,
         "the stored workflow is kept"
     );
+}
+
+async fn with_settings(label: &str, settings: &str) -> (Host, TestDir, TestDir) {
+    let work = TestDir::new(&format!("{label}-work"));
+    let agent = TestDir::new(&format!("{label}-agent"));
+    std::fs::create_dir_all(agent.path().join("ext")).unwrap();
+    std::fs::write(agent.path().join("ext/plan-mode.json"), settings).unwrap();
+    let host = Host::start(work.path(), agent.path(), Vec::new()).await;
+    (host, work, agent)
+}
+
+fn warnings_containing(host: &Host, text: &str) -> usize {
+    host.notices().iter().filter(|n| n.contains(text)).count()
+}
+
+#[tokio::test]
+async fn hidden_plan_tools_are_turned_back_on_with_one_warning() {
+    let (mut host, _work, _agent) = read_only("hidden-helpers").await;
+    // The deferred extension's auto mode took them out of the active tools.
+    host.tools.push(common::tool("deferred_search"));
+    host.active.retain(|name| !name.starts_with("plan_mode_"));
+    host.command("start").await;
+    assert_eq!(host.state()["enabled"], true);
+    assert!(
+        host.active.iter().any(|n| n == "plan_mode_complete"),
+        "{:?}",
+        host.active
+    );
+    assert_eq!(warnings_containing(&host, "turned them back on"), 1);
+    assert_eq!(warnings_containing(&host, "\"plan_mode_*\": \"on\""), 1);
+
+    host.active.retain(|name| !name.starts_with("plan_mode_"));
+    let context = json!({ "type": "context", "messages": [{ "role": "user", "content": "go" }] });
+    host.event("context", context).await;
+    assert!(host.active.iter().any(|n| n == "plan_mode_question"));
+    assert_eq!(
+        warnings_containing(&host, "turned them back on"),
+        1,
+        "once per workflow"
+    );
+}
+
+#[tokio::test]
+async fn allowed_tools_the_model_cannot_see_warn_once() {
+    let (mut host, _work, _agent) = read_only("hidden-allowed").await;
+    host.command("start").await;
+    let context = json!({ "type": "context", "messages": [{ "role": "user", "content": "go" }] });
+    host.event("context", context.clone()).await;
+    // After the policy froze with bash, something takes it out of the model's tools.
+    host.active.retain(|name| name != "bash");
+    host.event("context", context.clone()).await;
+    host.event("context", context).await;
+    assert_eq!(warnings_containing(&host, "The model cannot see bash"), 1);
+    assert!(
+        host.notices()
+            .iter()
+            .any(|n| n.contains("Turn it on in pi"))
+    );
+}
+
+#[tokio::test]
+async fn tools_lost_before_the_policy_freezes_warn() {
+    let (mut host, _work, _agent) = read_only("dropped").await;
+    host.command("start").await;
+    host.active.retain(|name| name != "bash");
+    let context = json!({ "type": "context", "messages": [{ "role": "user", "content": "go" }] });
+    host.event("context", context).await;
+    let warning = host
+        .notices()
+        .into_iter()
+        .find(|n| n.starts_with("Plan mode will not allow bash"))
+        .unwrap();
+    assert!(warning.contains("bash (inactive in pi)"), "{warning}");
+    assert_eq!(
+        host.state()["workflowToolPolicy"]["allowedNames"],
+        json!(["read"])
+    );
+}
+
+#[tokio::test]
+async fn unavailable_selections_and_an_empty_allowlist_warn() {
+    let (mut host, _work, _agent) = with_settings(
+        "unresolved",
+        r#"{ "defaultPlanTools": ["read", "mcp__docs__read", "edit"] }"#,
+    )
+    .await;
+    host.command("start").await;
+    let warning = host
+        .notices()
+        .into_iter()
+        .find(|n| n.starts_with("Plan mode will not allow"))
+        .unwrap();
+    assert!(
+        warning.contains("mcp__docs__read (not registered)"),
+        "{warning}"
+    );
+    assert!(
+        warning.contains("edit (blocked by the Plan policy)"),
+        "{warning}"
+    );
+
+    let (mut host, _work, _agent) = with_settings("empty", r#"{ "defaultPlanTools": [] }"#).await;
+    host.command("start").await;
+    assert_eq!(warnings_containing(&host, "Plan mode allows no tools"), 1);
+}
+
+#[tokio::test]
+async fn context_answers_nothing_when_nothing_changes() {
+    let (mut host, _work, _agent) = read_only("unchanged").await;
+    host.command("start").await;
+    host.command("exit").await;
+    let normal = host.sent_custom("plan-mode-transition").last().unwrap()["content"].clone();
+    let messages = json!([
+        { "role": "custom", "customType": "plan-mode-transition", "content": normal, "display": false },
+        { "role": "user", "content": "hi" }
+    ]);
+    let reply = host
+        .event(
+            "context",
+            json!({ "type": "context", "messages": messages }),
+        )
+        .await;
+    assert!(reply.get("result").is_none_or(Value::is_null), "{reply}");
+}
+
+#[tokio::test]
+async fn answers_over_4000_characters_are_asked_again() {
+    let work = TestDir::new("long-work");
+    let agent = TestDir::new("long-agent");
+    let mut host = Host::start_mode(work.path(), agent.path(), Vec::new(), "rpc").await;
+    host.command("start").await;
+    host.selects.push_back(Some("3. Type something.".into()));
+    host.inputs.push_back(Some("x".repeat(4001)));
+    host.selects.push_back(Some("2. SQLite".into()));
+    let question = json!({ "questions": [{ "id": "db", "header": "DB", "question": "Which database?",
+        "options": [
+            { "label": "Postgres", "description": "Server" },
+            { "label": "SQLite", "description": "Embedded" }
+        ] }] });
+    let result = host.tool("plan_mode_question", "q1", question).await;
+    assert_eq!(
+        result["details"]["answers"][0]["answer"], "SQLite",
+        "{result}"
+    );
+    assert_eq!(warnings_containing(&host, "at most 4,000 characters"), 1);
 }
