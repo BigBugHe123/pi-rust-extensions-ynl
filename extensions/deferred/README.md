@@ -1,6 +1,6 @@
 # deferred
 
-Created 2026-11-02. Last updated 2026-11-04.
+Created 2026-11-02. Last updated 2026-11-24.
 
 Keeps tools, skills, context files, and prompt sections out of the system prompt until the model needs them, like Claude Code's tool search and deferred tools. You choose a mode for each item: loaded as usual, listed by name only, searchable but not listed, user-only (skills), or disabled. The model loads deferred items with the `deferred_search` tool.
 
@@ -63,17 +63,19 @@ The `<deferred>` section is in the prompt only while something is deferred. The 
   - Context patterns match the whole path when they start with `/` or `~`. Otherwise they match a trailing part of the path, so `AGENTS.md` matches every `AGENTS.md`.
   - When several patterns match, the last one wins. Within one source, that is the last in the object.
 - `auto` is a percent of the model's context window, `10` by default. When extension and MCP tools that no rule matches have schemas larger than that share, they become `names`. `false` or `0` turns `auto` off. It only counts tools with `direct` exposure, and only when pi reports the context window.
+- The built-in `plan_mode_*` rule uses `on` so Plan mode tools stay active from the first request. Their schemas are excluded from the `auto` threshold. Any matching rule in your config overrides the built-in rule, including a wildcard.
 - `maxResults` is the default `max_results`, 1 to 50.
 - `repos` maps `owner/name` to a block with the same fields. A block applies only when the cwd is in a git repo whose `origin` remote is that repo.
   - The extension reads the remote with `git remote get-url origin`. It takes the last two path parts of `https`, `ssh`, `git`, and `git@host:owner/name.git` URLs.
   - Keys match without case, and `*` and `?` work (`yannelli/*`).
   - Put `repos` in `<agentDir>/ext/deferred.json` or the global `deferred` setting.
-- Sources apply in this order, and later rules win:
-  1. `<agentDir>/ext/deferred.json`, with the fields at the top level.
-  2. The `deferred` setting of `<agentDir>/settings.json`.
-  3. The matching `repos` blocks: first from step 1, then from step 2.
-  4. The `deferred` setting of `<cwd>/.pi/settings.json`. pi merges it into the setting only when the project is trusted.
-  5. `<cwd>/.pi/ext/deferred.json`, but only when the project is trusted.
+- Sources apply in this order. Later rules win.
+  1. Built-in defaults.
+  2. `<agentDir>/ext/deferred.json`, with the fields at the top level.
+  3. The `deferred` setting of `<agentDir>/settings.json`.
+  4. Matching `repos` blocks from the global file, then from the global setting.
+  5. The `deferred` setting of `<cwd>/.pi/settings.json`. pi merges it into the setting only when the project is trusted.
+  6. `<cwd>/.pi/ext/deferred.json`, but only when the project is trusted.
 - In a git worktree without `<cwd>/.pi/settings.json` or `<cwd>/.pi/ext/deferred.json`, the main checkout's copy applies.
 - The extension reads the config and the repo on `session_start`, `/deferred reload`, and after `/deferred set`. Rules apply from the next prompt.
 
@@ -82,13 +84,13 @@ The `<deferred>` section is in the prompt only while something is deferred. The 
 - `/deferred`: opens the panel, laid out like pi's `/acp` browser. Without a UI it prints the status instead.
   - Tabs: Tools, Skills, Context, Sections, and Rules, each with a count. The title line shows the estimated tokens kept out of the prompt.
   - Each row shows the mode (`●` on, `◐` names, `○` deferred, `◇` user, `✕` off), the estimated tokens, and why the item has that mode.
-    - The reason is `[global]`, `[project]`, or `[repo owner/name]` for a rule that names the item, and `rule <pattern>` for a pattern.
+    - The reason shows the rule source, such as `[built-in]`, `[global]`, `[project]`, or `[repo owner/name]`. A wildcard rule also shows `rule <pattern>`.
     - It can also be `auto`, `undeclared` for an MCP tool that pi keeps undeclared, or `pinned` when pi decides. Tools the model loaded show `loaded`.
   - Typing filters the current tab. `Tab` and `Shift+Tab` switch tabs. `Esc` clears the search, then closes.
   - `←`/`→` move the selected item or rule to the previous or next mode. Only skills have `user`. The change is written to the scope of the item's own rule, or to the global settings.
   - `Enter` opens the actions pane, which shows the details and these actions: set each mode, remove the item's rule, and unload a loaded tool. A new rule asks where to save it when there is a choice: the global settings, the project settings in a trusted project, or the cwd's repo.
   - To turn off one MCP tool, select it and pick `off`. That also works for MCP tools marked `undeclared`.
-  - Pinned items cannot change: skills with `disable-model-invocation`. Rules from `deferred.json` files are read-only in the panel, so edit the file.
+  - Pinned skills have `disable-model-invocation` and are read-only. To change a rule from a `deferred.json` file, edit the file. To override a built-in rule, set a rule for the item in its tab.
   - Changes apply from the next prompt.
 - `/deferred status`: shows the config sources, the cwd's repo, the rules (repo rules end in `[repo owner/name]`), `auto`, and parse warnings. After a prompt, it also shows each kind's counts, names, an estimate of the tokens kept out of the prompt, and the tools loaded this session.
 - `/deferred set <tools|skills|context|sections> <pattern> <mode> [--project|--repo [owner/name]]`: writes one rule to the `deferred` setting in `<agentDir>/settings.json`, or in `<cwd>/.pi/settings.json` with `--project`.

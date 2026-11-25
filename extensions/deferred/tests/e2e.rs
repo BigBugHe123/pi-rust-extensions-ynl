@@ -6,6 +6,53 @@ const SKILL: &str =
     "---\nname: demo\ndescription: Demo skill for the e2e test\n---\nDEMO-SKILL-BODY-41c2\n";
 
 #[test]
+fn auto_keeps_plan_mode_tool_callable_on_the_first_request() {
+    if pi_bin_or_skip().is_none() {
+        return;
+    }
+    let tools = r#"
+export default function (pi) {
+  for (const name of ["plan_mode_complete", "demo_tool"]) {
+    pi.registerTool({
+      name,
+      label: name,
+      description: "Test tool for the deferred loadout",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ content: [{ type: "text", text: "Called " + name }] }),
+    });
+  }
+}
+"#;
+    let output = Run::new(cargo_bin("pi-rust-ext", "pi-rust-ext"))
+        .args(["deferred"])
+        .settings(json!({ "deferred": { "auto": 0.001 } }))
+        .file("work/tools.js", tools)
+        .pi_args(["-e", "./tools.js"])
+        .turns([
+            Turn::tool_call("plan_mode_complete", json!({})),
+            Turn::text("done"),
+        ])
+        .run()
+        .unwrap();
+    let first = output.tool_names(0);
+    assert!(
+        first.iter().any(|name| name == "plan_mode_complete"),
+        "{first:?}\n{}",
+        output.stderr
+    );
+    assert!(!first.iter().any(|name| name == "demo_tool"), "{first:?}");
+    assert!(
+        output
+            .system_prompt(0)
+            .contains("Deferred tools: demo_tool")
+    );
+    assert_eq!(
+        output.tool_result_text("plan_mode_complete").as_deref(),
+        Some("Called plan_mode_complete")
+    );
+}
+
+#[test]
 fn deferred_tool_loads_on_the_next_call_and_skills_list_by_name() {
     if pi_bin_or_skip().is_none() {
         return;

@@ -34,7 +34,7 @@ pub enum Why {
     Default,
     /// `auto` made the tool `names`.
     Auto,
-    /// `scope` is `None` for a rule in a `deferred.json` file, which the panel cannot edit.
+    /// `scope` is `None` for a built-in rule or a rule in a `deferred.json` file.
     Rule {
         pattern: String,
         source: String,
