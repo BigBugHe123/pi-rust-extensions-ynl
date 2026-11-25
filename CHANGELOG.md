@@ -2,6 +2,13 @@
 
 All notable changes to pi-rust-extensions are documented here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, breaking changes bump the minor version.
 
+## [0.5.27] - 2026-11-25
+
+### Fixed
+
+- **plan-mode:** point the hidden tool advice at deferred rules ([ec92e30](https://github.com/yannelli/pi-rust-extensions/commit/ec92e30f6dc5dca050f56020c3da7eb73b2ca0dd))
+- **deferred:** keep plan mode tools on by default ([36ea73e](https://github.com/yannelli/pi-rust-extensions/commit/36ea73e6685c573a41f506bc646104a296d193b6))
+
 ## [0.5.26] - 2026-11-25
 
 ### Added
