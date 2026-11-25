@@ -2,6 +2,13 @@
 
 All notable changes to pi-rust-extensions are documented here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, breaking changes bump the minor version.
 
+## [0.5.25] - 2026-11-24
+
+### Fixed
+
+- **subscription-router:** remove temp files that killed writers left ([884c5f0](https://github.com/yannelli/pi-rust-extensions/commit/884c5f04b4356b795a493301ab8533a3ee18a87b))
+- **workflows:** make runs reliable and rebuild the /workflows panel ([de3cb47](https://github.com/yannelli/pi-rust-extensions/commit/de3cb47283130a0b91fcfe7dc6b0b17c76cfaaf1))
+
 ## [0.5.24] - 2026-11-23
 
 ### Added
