@@ -1,7 +1,9 @@
-//! Text views of a goal for `get_goal` and `/goal-status`.
+//! Text views of a goal for `get_goal` and `/goal-status`, and the goal tool result `details`.
+
+use serde_json::{Value, json};
 
 use crate::format::{format_duration, objective_title, status_label, truncate_text};
-use crate::state::Goal;
+use crate::state::{Goal, TaskStatus};
 
 pub const PAGE_CHARS: usize = 4_000;
 
@@ -126,6 +128,53 @@ pub fn history(goal: &Goal) -> String {
 pub fn verbose(goal: &Goal) -> String {
     let tasks = tasks(goal, None).unwrap_or_default();
     [summary(goal, true), objective(goal), tasks, history(goal)].join("\n\n")
+}
+
+/// The pi-goal-x tool result `details` that Paseo reads to show the task list:
+/// `{ version: 3, goal: { currentTaskId?, taskList?: { tasks } } }`, or `goal: null` without a
+/// focused goal. pi-goal-x has no in-progress status, so a task in progress is `pending`, and
+/// Paseo shows the task that `currentTaskId` names as in progress: the goal's current task, else
+/// the first task in progress.
+pub fn details(goal: Option<&Goal>) -> Value {
+    let Some(goal) = goal else {
+        return json!({ "version": 3, "goal": null });
+    };
+    let mut state = json!({});
+    let current = goal.current_task_id.clone().or_else(|| {
+        goal.ordered_tasks()
+            .into_iter()
+            .find(|(_, task)| task.status == TaskStatus::InProgress)
+            .map(|(_, task)| task.id.clone())
+    });
+    if let Some(id) = current {
+        state["currentTaskId"] = json!(id);
+    }
+    if !goal.tasks.is_empty() {
+        state["taskList"] = json!({ "tasks": task_tree(goal, None, 0) });
+    }
+    json!({ "version": 3, "goal": state })
+}
+
+/// The children of `parent` with their `subtasks`, to the depth that `Goal::ordered_tasks` shows.
+fn task_tree(goal: &Goal, parent: Option<&str>, depth: usize) -> Vec<Value> {
+    if depth > 16 {
+        return Vec::new();
+    }
+    goal.children(parent)
+        .map(|task| {
+            let status = match task.status {
+                TaskStatus::Pending | TaskStatus::InProgress => "pending",
+                TaskStatus::Complete => "complete",
+                TaskStatus::Skipped => "skipped",
+            };
+            let mut item = json!({ "id": task.id, "title": task.title, "status": status });
+            let subtasks = task_tree(goal, Some(&task.id), depth + 1);
+            if !subtasks.is_empty() {
+                item["subtasks"] = json!(subtasks);
+            }
+            item
+        })
+        .collect()
 }
 
 /// One `PAGE_CHARS` page of `text` from `cursor` (a character offset).

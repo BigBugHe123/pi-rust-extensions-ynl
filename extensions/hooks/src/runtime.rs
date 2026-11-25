@@ -7,8 +7,11 @@ use serde_json::Value;
 use tokio::sync::Semaphore;
 
 use crate::config::{self, LoadInput, Loaded};
+use crate::exec::http::HttpPolicy;
+use crate::limit::SessionSlots;
 use crate::model::HookDef;
 use crate::paths::{Paths, state_dir};
+use crate::policy::ConflictMode;
 use crate::trust::{LastRuns, Trust, TrustState, load_json, save_json};
 
 pub const TRUST_ALL_FLAG: &str = "hooks-trust-all";
@@ -31,6 +34,8 @@ pub struct State {
     pub notified_untrusted: bool,
     pub reverting_model: Option<String>,
     pub turn: u64,
+    /// Provider requests sent this session, for Codex `request_id`.
+    pub model_requests: u64,
     pub spill: u64,
     /// Consecutive Stop blocks since the last tool call or user input.
     pub stop_blocks: u32,
@@ -40,6 +45,8 @@ pub struct State {
     pub added_dirs: Vec<PathBuf>,
     /// Tool calls this extension blocked.
     pub own_blocks: HashSet<String>,
+    /// PreToolUse `stopReason` texts by tool call id, applied after the tool runs.
+    pub pending_stops: HashMap<String, String>,
     /// Id of the user prompt being processed (`prompt_id`).
     pub prompt_id: Option<String>,
     /// When each tool call left `tool_call`, for `duration_ms`.
@@ -53,12 +60,15 @@ pub struct State {
     /// When the agent last settled with no follow-up; cleared by user input.
     pub settled_at: Option<std::time::Instant>,
     pub flag_trust_all: bool,
+    /// Conflict texts already shown under `conflicts: "warn"`.
+    pub warned_conflicts: HashSet<String>,
 }
 
 pub struct Runtime {
     pub paths: Paths,
     state: Mutex<State>,
     pub async_slots: Arc<Semaphore>,
+    pub hook_slots: SessionSlots,
 }
 
 impl Runtime {
@@ -67,6 +77,7 @@ impl Runtime {
             paths,
             state: Mutex::new(State::default()),
             async_slots: Arc::new(Semaphore::new(ASYNC_LIMIT)),
+            hook_slots: SessionSlots::default(),
         })
     }
 
@@ -124,12 +135,45 @@ impl Runtime {
                 )
             });
             state.notified_untrusted |= notice.is_some();
+            let conflicts = conflict_notice(&loaded, &mut state.warned_conflicts);
             state.loaded = Some(loaded);
-            notice
+            [notice, conflicts]
         };
-        if let Some(notice) = notice {
+        for notice in notice.into_iter().flatten() {
             pi_ext_sdk::warn!("{notice}");
             let _ = host.notify_warning(notice).await;
+        }
+    }
+
+    pub fn conflict_mode(&self) -> ConflictMode {
+        self.lock()
+            .loaded
+            .as_ref()
+            .map_or(ConflictMode::Merge, |l| l.options.conflicts)
+    }
+
+    /// A [`crate::config::options::SWITCHES`] value; its default before the config loads.
+    pub fn switch_on(&self, key: &str) -> bool {
+        self.lock().loaded.as_ref().map_or_else(
+            || config::Options::default().switch_on(key),
+            |l| l.options.switch_on(key),
+        )
+    }
+
+    pub fn http_policy(&self) -> HttpPolicy {
+        self.lock()
+            .loaded
+            .as_ref()
+            .map(|l| l.http.clone())
+            .unwrap_or_default()
+    }
+
+    /// The trust level the panel shows; see `HookDef::trusted_by_policy`.
+    pub fn trust_of(&self, def: &HookDef) -> Trust {
+        if def.trusted_by_policy() {
+            Trust::Managed
+        } else {
+            self.trust_level(&def.hash)
         }
     }
 
@@ -164,17 +208,19 @@ impl Runtime {
     }
 
     /// Disabled in a scope's `disabled` list or in the older `state.json` list.
-    pub fn is_disabled(&self, hash: &str) -> bool {
+    pub fn is_disabled(&self, def: &HookDef) -> bool {
         let state = self.lock();
-        let in_scope = state
-            .loaded
-            .as_ref()
-            .is_some_and(|l| l.options.disabled.contains(hash));
-        in_scope
-            || state
-                .trust
+        def.disabled_keys().iter().any(|key| {
+            let in_scope = state
+                .loaded
                 .as_ref()
-                .is_some_and(|t| t.disabled.contains(hash))
+                .is_some_and(|l| l.options.disabled.contains(*key));
+            in_scope
+                || state
+                    .trust
+                    .as_ref()
+                    .is_some_and(|t| t.disabled.contains(*key))
+        })
     }
 
     /// Changes the trust state and writes `state.json`.
@@ -216,13 +262,15 @@ impl Runtime {
         state.last_error = None;
         state.prompt_id = None;
         state.tool_started.clear();
+        state.pending_stops.clear();
+        state.warned_conflicts.clear();
         state.mcp_sources = None;
     }
 
     /// Asks the user about an untrusted hook. `true` when it may run now.
     pub async fn resolve_trust(&self, host: &Host, def: &HookDef) -> bool {
-        match self.trust_level(&def.hash) {
-            Trust::All | Trust::Trusted | Trust::Once => return true,
+        match self.trust_of(def) {
+            Trust::Managed | Trust::All | Trust::Trusted | Trust::Once => return true,
             Trust::Denied => return false,
             Trust::Untrusted => {}
         }
@@ -257,4 +305,22 @@ impl Runtime {
             _ => false,
         }
     }
+}
+
+/// Under `conflicts: "warn"`, one notice for the conflicts not shown yet this session.
+fn conflict_notice(loaded: &Loaded, warned: &mut HashSet<String>) -> Option<String> {
+    if loaded.options.conflicts != ConflictMode::Warn {
+        return None;
+    }
+    let texts = loaded.conflicts.iter().map(|c| c.text());
+    let new: Vec<String> = texts
+        .chain(loaded.duplicates.iter().cloned())
+        .filter(|text| warned.insert(text.clone()))
+        .collect();
+    (!new.is_empty()).then(|| {
+        format!(
+            "hooks: these hooks have conflicts, and all of them run. To run only the most specific layer, set the conflicts mode to override in /hooks. {}",
+            new.join("; ")
+        )
+    })
 }

@@ -185,7 +185,7 @@ fn delete(app: &App, host: &Host, params: &Params) -> Answer {
 }
 
 async fn run(app: &App, host: &Host, params: Params) -> Answer {
-    let workflow = match (&params.workflow, &params.name) {
+    let mut workflow: Workflow = match (&params.workflow, &params.name) {
         (Some(value), _) => {
             serde_json::from_value(value.clone()).map_err(|e| format!("invalid workflow: {e}"))?
         }
@@ -197,6 +197,7 @@ async fn run(app: &App, host: &Host, params: Params) -> Answer {
         }
         (None, None) => return Err("run needs a name or a workflow".into()),
     };
+    let asked = workflow.clear_ask();
     let inputs = params.inputs.unwrap_or_default();
     let background = params
         .background
@@ -209,9 +210,16 @@ async fn run(app: &App, host: &Host, params: Params) -> Answer {
     } else {
         "in the foreground; it stops when this pi quits"
     };
-    Ok(format!(
+    let mut text = format!(
         "Started run {id} {mode}. Its result arrives as a message. Use action status with this id to check it."
-    ))
+    );
+    if !asked.is_empty() {
+        text.push_str(&format!(
+            " {} ask for a model when the user starts the run; here they use the model they inherit.",
+            asked.join(", ")
+        ));
+    }
+    Ok(text)
 }
 
 fn status(app: &App, host: &Host, id: Option<&str>) -> Answer {
@@ -219,7 +227,7 @@ fn status(app: &App, host: &Host, id: Option<&str>) -> Answer {
     let Some(id) = id else {
         return Ok(runs_text(app));
     };
-    let run = app.runs.get(id).ok_or_else(|| format!("no run {id}"))?;
+    let run = app.find(host, id).ok_or_else(|| format!("no run {id}"))?;
     Ok(detail(&run))
 }
 

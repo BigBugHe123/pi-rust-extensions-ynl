@@ -195,6 +195,15 @@ fn rename(value: &Value, pairs: &[(&str, &str)]) -> Value {
 mod tests {
     use super::*;
 
+    /// A Unix absolute path as an absolute path on this platform (under `C:` on Windows).
+    fn abs(path: &str) -> String {
+        if cfg!(windows) {
+            format!("C:{}", path.replace('/', "\\"))
+        } else {
+            path.to_owned()
+        }
+    }
+
     #[test]
     fn names_map() {
         assert_eq!(hook_tool_name("bash"), "Bash");
@@ -205,9 +214,9 @@ mod tests {
 
     #[test]
     fn edit_input_round_trips() {
-        let pi = json!({ "path": "/r/a.ts", "edits": [{ "oldText": "x", "newText": "y" }] });
-        let hook = to_hook_input("edit", &pi, Path::new("/r"));
-        assert_eq!(hook["file_path"], "/r/a.ts");
+        let pi = json!({ "path": abs("/r/a.ts"), "edits": [{ "oldText": "x", "newText": "y" }] });
+        let hook = to_hook_input("edit", &pi, Path::new(&abs("/r")));
+        assert_eq!(hook["file_path"], abs("/r/a.ts"));
         assert_eq!(hook["old_string"], "x");
         assert_eq!(hook["edits"][0]["new_string"], "y");
         assert_eq!(from_hook_input("edit", &hook), pi);
@@ -220,15 +229,16 @@ mod tests {
 
     #[test]
     fn read_and_bash_inputs() {
-        let cwd = Path::new("/r/sub");
+        let cwd = abs("/r/sub");
+        let cwd = Path::new(&cwd);
         let hook = to_hook_input("read", &json!({ "path": "../f", "offset": 2 }), cwd);
         assert_eq!(
             hook,
-            json!({ "path": "../f", "offset": 2, "file_path": "/r/f" })
+            json!({ "path": "../f", "offset": 2, "file_path": abs("/r/f") })
         );
         assert_eq!(
             from_hook_input("read", &hook),
-            json!({ "path": "/r/f", "offset": 2 })
+            json!({ "path": abs("/r/f"), "offset": 2 })
         );
         let bash = json!({ "command": "ls" });
         assert_eq!(to_hook_input("bash", &bash, cwd), bash);
@@ -237,17 +247,24 @@ mod tests {
 
     #[test]
     fn codex_apply_patch_input() {
-        let cwd = Path::new("/r");
+        let cwd = abs("/r");
+        let cwd = Path::new(&cwd);
         let write = to_hook_input("write", &json!({ "path": "n.txt", "content": "a\nb" }), cwd);
         assert_eq!(
             codex_tool_input("write", &write)["command"],
-            "*** Begin Patch\n*** Add File: /r/n.txt\n+a\n+b\n*** End Patch\n"
+            format!(
+                "*** Begin Patch\n*** Add File: {}\n+a\n+b\n*** End Patch\n",
+                abs("/r/n.txt")
+            )
         );
         let pi = json!({ "path": "e.rs", "edits": [{ "oldText": "x", "newText": "y" }] });
         let edit = codex_tool_input("edit", &to_hook_input("edit", &pi, cwd));
         assert_eq!(
             edit["command"],
-            "*** Begin Patch\n*** Update File: /r/e.rs\n@@\n-x\n+y\n*** End Patch\n"
+            format!(
+                "*** Begin Patch\n*** Update File: {}\n@@\n-x\n+y\n*** End Patch\n",
+                abs("/r/e.rs")
+            )
         );
         assert_eq!(codex_tool_name("Edit"), "apply_patch");
         assert_eq!(codex_tool_name("Bash"), "Bash");

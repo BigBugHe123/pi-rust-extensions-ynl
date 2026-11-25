@@ -11,6 +11,9 @@ use crate::model::{Kind, Target};
 use crate::results::StreamResult;
 
 const CLAUDE_CODE_SYSTEM_PROMPT: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+/// Keep equal to `CLAUDE_CODE_VERSION` in pi-rust `crates/pi-ai/src/providers/anthropic/request.rs`.
+/// Anthropic rejects OAuth requests for new models from older Claude Code versions.
+const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.322";
 
 pub fn messages_url(base: &str) -> String {
     let base = base.trim_end_matches('/');
@@ -71,7 +74,7 @@ pub fn build_headers(target: &Target) -> Result<HeaderMap> {
                 None => beta.to_owned(),
             };
             set(&mut headers, "anthropic-beta", &beta)?;
-            for (name, value) in [("user-agent", "claude-cli/2.1.251"), ("x-app", "cli")] {
+            for (name, value) in [("user-agent", CLAUDE_CODE_USER_AGENT), ("x-app", "cli")] {
                 if !headers.contains_key(name) {
                     set(&mut headers, name, value)?;
                 }

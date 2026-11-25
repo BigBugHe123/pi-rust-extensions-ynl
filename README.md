@@ -27,6 +27,7 @@ For example, `pi install marketplace:todo`. You can also open `/extensions` in t
 | [`goal`](extensions/goal/README.md) | Persistent goals, task trees, autonomous continuation, and completion audits. |
 | [`workflows`](extensions/workflows/README.md) | Fixed and dynamic multi-agent workflows with per-step models, tools, skills, MCP servers, subagent rules, and env; waits, loops, goals, and approvals that wait for you; background runs that outlive pi; a TUI editor (`/workflows`), the `workflow` tool, and authoring skills. |
 | [`simple-goal`](extensions/simple-goal/README.md) | One objective that keeps the agent working until a configurable evaluator agrees it is done. |
+| [`plan-mode`](extensions/plan-mode/README.md) | Codex-like read-only `/plan` mode: explore, ask structured questions, and approve a complete plan before pi edits files. |
 | [`ask-user-question`](extensions/ask-user-question/README.md) | Tabbed questionnaire tool (`ask_user_question`) for structured answers from the user. |
 | [`background-tasks`](extensions/background-tasks/README.md) | Durable background shell jobs with output and task management. |
 | [`timers`](extensions/timers/README.md) | `sleep`, heartbeat watchdogs, and scheduled prompts that wake the agent. |
@@ -75,7 +76,7 @@ For example, `pi install marketplace:todo`. You can also open `/extensions` in t
 | --- | --- |
 | [`statusline`](extensions/statusline/README.md) | Configurable footer status line: builtin presets and themes, command scripts, Claude Code, Cursor, and Codex status lines, and the `/statusline` editor. |
 | [`compact-tui`](extensions/compact-tui/README.md) | Compact animated rows for the built-in tools, a working indicator that names each step, a busy title, and a run summary. |
-| [`iterm2`](extensions/iterm2/README.md) | iTerm2 integration: tab color follows the agent state, session badge, status bar user variables, attention requests, and `/terminal-setup`. |
+| [`iterm2`](extensions/iterm2/README.md) | iTerm2 integration: tab color follows the agent state with themes and per-state colors (`/iterm2`), session badge, status bar user variables, attention requests, and `/terminal-setup`. |
 
 ## Layout
 

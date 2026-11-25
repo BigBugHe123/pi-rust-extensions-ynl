@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
 
@@ -18,6 +18,9 @@ fn fixture() -> Fixture {
         claude_dir: base.join("claude"),
         codex_home: base.join("codex"),
         codex_system: None,
+        claude_policy: None,
+        claude_os_policy: None,
+        codex_mdm: None,
         temp_dir: base.join("tmp"),
         agent_dir: None,
     };
@@ -81,7 +84,7 @@ fn merges_all_sources_and_scopes() {
         [
             "claude/global:cg",
             "claude/project:cp",
-            "claude/project:cl",
+            "claude/local:cl",
             "codex/global:xg",
             "codex/project:xp",
             "pi/global:pg",
@@ -120,7 +123,7 @@ fn scope_and_sources_options() {
     let loaded = load_with(&f, true);
     assert_eq!(
         commands(&loaded),
-        ["claude/project:cp", "claude/project:cl", "pi/project:pp"]
+        ["claude/project:cp", "claude/local:cl", "pi/project:pp"]
     );
     write(
         &f.agent.join("ext/hooks.json"),
@@ -217,7 +220,7 @@ fn claude_settings_in_home_load_once() {
         &hooks_json("cl"),
     );
     let loaded = load_with(&f, true);
-    assert_eq!(commands(&loaded), ["claude/global:cg", "claude/project:cl"]);
+    assert_eq!(commands(&loaded), ["claude/global:cg", "claude/local:cl"]);
 }
 
 #[test]
@@ -245,12 +248,194 @@ fn disable_all_hooks_follows_settings_precedence() {
     );
 }
 
+fn with_policy() -> (Fixture, PathBuf) {
+    let f = fixture();
+    let policy = f.cwd.parent().unwrap().join("claude-policy");
+    let paths = Paths {
+        claude_policy: Some(policy.clone()),
+        ..f.paths.clone()
+    };
+    (Fixture { paths, ..f }, policy)
+}
+
+fn plugin_groups(ids: &[&str]) -> Value {
+    let groups: Vec<Value> = ids
+        .iter()
+        .map(|id| json!({ "plugin": id, "hooks": [{ "command": id }] }))
+        .collect();
+    json!({ "Stop": groups })
+}
+
+#[test]
+fn force_enabled_plugin_hooks_pass_claude_gates() {
+    let (f, policy) = with_policy();
+    let pi = json!({ "hooks": plugin_groups(&["fmt@acme", "fmt@other", "lint@acme"]) });
+    write(&f.agent.join("ext/hooks.json"), &pi.to_string());
+    let managed = |extra: Value| {
+        let mut doc = json!({ "enabledPlugins": { "fmt@acme": true, "lint@acme": true } });
+        doc.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        write(&policy.join("managed-settings.json"), &doc.to_string());
+    };
+    write(
+        &policy.join("managed-settings.d/10-off.json"),
+        r#"{"enabledPlugins":{"lint@acme":false}}"#,
+    );
+    let forced = ["pi/global plugin fmt@acme:fmt@acme"];
+    managed(json!({ "allowManagedHooksOnly": true }));
+    assert_eq!(commands(&load_with(&f, true)), forced);
+    managed(json!({}));
+    let other = r#""enabledPlugins":{"fmt@other":true}"#;
+    write(
+        &f.paths.claude_dir.join("settings.json"),
+        &format!(r#"{{"disableAllHooks":true,{other}}}"#),
+    );
+    write(
+        &f.cwd.join(".claude/settings.json"),
+        &format!("{{{other}}}"),
+    );
+    assert_eq!(commands(&load_with(&f, true)), forced);
+    managed(json!({ "disableAllHooks": true }));
+    assert!(commands(&load_with(&f, true)).is_empty());
+    managed(json!({ "allowManagedHooksOnly": true }));
+    let switched_off = json!({ "managed": { "forceEnabledPlugins": false }, "hooks": pi["hooks"] });
+    write(&f.agent.join("ext/hooks.json"), &switched_off.to_string());
+    assert!(commands(&load_with(&f, true)).is_empty());
+}
+
+#[test]
+fn managed_false_drops_plugin_groups_without_a_gate() {
+    let (f, policy) = with_policy();
+    let hooks = plugin_groups(&["fmt@acme", "lint@acme"]);
+    write(
+        &f.agent.join("ext/hooks.json"),
+        &json!({ "hooks": hooks }).to_string(),
+    );
+    write(
+        &f.paths.claude_dir.join("settings.json"),
+        r#"{"enabledPlugins":{"lint@acme":true}}"#,
+    );
+    write(
+        &policy.join("managed-settings.json"),
+        r#"{"enabledPlugins":{"lint@acme":false}}"#,
+    );
+    let fmt = ["pi/global plugin fmt@acme:fmt@acme"];
+    assert_eq!(commands(&load_with(&f, true)), fmt);
+    let switched_off = json!({ "managed": { "forceEnabledPlugins": false }, "hooks": hooks });
+    write(&f.agent.join("ext/hooks.json"), &switched_off.to_string());
+    assert_eq!(commands(&load_with(&f, true)), fmt);
+}
+
+#[test]
+fn managed_plugin_gates_apply_with_the_claude_source_off() {
+    let (f, policy) = with_policy();
+    let hooks = plugin_groups(&["fmt@acme", "lint@acme"]);
+    write(
+        &f.agent.join("ext/hooks.json"),
+        &json!({ "hooks": hooks }).to_string(),
+    );
+    write(
+        &f.cwd.join(".pi/ext/hooks.json"),
+        r#"{"sources":{"claude":false}}"#,
+    );
+    write(&f.paths.claude_dir.join("settings.json"), &hooks_json("cg"));
+    let managed = |doc: &str| write(&policy.join("managed-settings.json"), doc);
+    let fmt = ["pi/global plugin fmt@acme:fmt@acme"];
+    managed(r#"{"enabledPlugins":{"lint@acme":false}}"#);
+    assert_eq!(commands(&load_with(&f, true)), fmt);
+    managed(r#"{"allowManagedHooksOnly":true,"enabledPlugins":{"fmt@acme":true}}"#);
+    assert_eq!(commands(&load_with(&f, true)), fmt);
+    managed(r#"{"disableAllHooks":true,"enabledPlugins":{"fmt@acme":true}}"#);
+    assert!(commands(&load_with(&f, true)).is_empty());
+}
+
+#[test]
+fn a_project_options_file_cannot_turn_off_managed_hooks() {
+    let (f, policy) = with_policy();
+    let system = f.cwd.parent().unwrap().join("etc-codex");
+    let paths = Paths {
+        codex_system: Some(system.clone()),
+        ..f.paths.clone()
+    };
+    let f = Fixture { paths, ..f };
+    write(&policy.join("managed-settings.json"), &hooks_json("cm"));
+    write(&system.join("hooks.json"), &hooks_json("xm"));
+    write(&f.paths.claude_dir.join("settings.json"), &hooks_json("cg"));
+    write(&f.paths.codex_home.join("hooks.json"), &hooks_json("xg"));
+    let off = r#"{"sources":{"claude":false,"codex":false}}"#;
+    write(&f.cwd.join(".pi/ext/hooks.json"), off);
+    let mut managed = commands(&load_with(&f, true));
+    managed.sort();
+    assert_eq!(managed, ["claude/managed:cm", "codex/managed:xm"]);
+    write(&f.agent.join("ext/hooks.json"), off);
+    assert!(commands(&load_with(&f, true)).is_empty());
+}
+
+#[test]
+fn the_user_codex_feature_applies_in_every_scope() {
+    let f = fixture();
+    write(
+        &f.paths.codex_home.join("config.toml"),
+        "[features]\nhooks = false\n",
+    );
+    write(&f.cwd.join(".codex/hooks.json"), &hooks_json("xp"));
+    write(&f.cwd.join(".pi/ext/hooks.json"), r#"{"scope":"project"}"#);
+    assert!(commands(&load_with(&f, true)).is_empty());
+    write(&f.paths.codex_home.join("config.toml"), "");
+    assert_eq!(commands(&load_with(&f, true)), ["codex/project:xp"]);
+}
+
+#[test]
+fn user_policy_keys_apply_in_every_scope() {
+    let f = fixture();
+    let user = json!({
+        "disableAllHooks": true,
+        "allowedHttpHookUrls": ["https://user.example.com/*"],
+    });
+    write(&f.paths.claude_dir.join("settings.json"), &user.to_string());
+    write(&f.cwd.join(".claude/settings.json"), &hooks_json("cp"));
+    write(&f.cwd.join(".pi/ext/hooks.json"), r#"{"scope":"project"}"#);
+    let loaded = load_with(&f, true);
+    assert!(commands(&loaded).is_empty());
+    assert_eq!(
+        loaded.http.urls,
+        Some(vec!["https://user.example.com/*".to_owned()])
+    );
+}
+
+#[test]
+fn managed_http_allowlists_apply_with_the_claude_source_off() {
+    let (f, policy) = with_policy();
+    write(
+        &f.cwd.join(".pi/ext/hooks.json"),
+        r#"{"sources":{"claude":false}}"#,
+    );
+    write(
+        &f.paths.claude_dir.join("settings.json"),
+        r#"{"allowedHttpHookUrls":["https://user.example.com/*"]}"#,
+    );
+    write(
+        &policy.join("managed-settings.json"),
+        r#"{"allowedHttpHookUrls":["https://hooks.example.com/*"],"httpHookAllowedEnvVars":["TOKEN"]}"#,
+    );
+    let http = load_with(&f, true).http;
+    assert_eq!(
+        http.urls,
+        Some(vec!["https://hooks.example.com/*".to_owned()])
+    );
+    assert_eq!(http.env_vars, Some(vec!["TOKEN".to_owned()]));
+}
+
 #[test]
 fn codex_layers_and_hook_state() {
     let f = fixture();
     let system = f.cwd.parent().unwrap().join("etc-codex");
     let paths = Paths {
         codex_system: Some(system.clone()),
+        claude_policy: None,
+        claude_os_policy: None,
+        codex_mdm: None,
         ..f.paths.clone()
     };
     let f = Fixture { paths, ..f };
@@ -265,7 +450,8 @@ fn codex_layers_and_hook_state() {
     );
     write(
         &f.paths.codex_home.join("config.toml"),
-        &format!("[hooks.state.\"{key}\"]\nenabled = false\n"),
+        // A literal (single-quoted) key: Windows paths have backslashes, which are escapes in `"..."`.
+        &format!("[hooks.state.'{key}']\nenabled = false\n"),
     );
     let loaded = load(&LoadInput {
         paths: &f.paths,
@@ -276,7 +462,7 @@ fn codex_layers_and_hook_state() {
     assert_eq!(
         commands(&loaded),
         [
-            "codex/global:sys",
+            "codex/managed:sys",
             "codex/project:root",
             "codex/project:nested"
         ]

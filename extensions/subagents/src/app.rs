@@ -1,5 +1,6 @@
 //! Shared extension state: runs, config and agent loading, and the background widget.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -19,6 +20,9 @@ pub struct App {
     pub runs: Runs,
     pub published: crate::active_work::Published,
     pub offered: crate::context::Offered,
+    /// The `pi-rust-ext` binary that starts detached runners; `None` keeps every run in this
+    /// process.
+    pub runner: Option<PathBuf>,
     widget_ticking: Arc<AtomicBool>,
     widget_shown: Arc<AtomicBool>,
     warned_untrusted: Arc<AtomicBool>,
@@ -32,6 +36,14 @@ pub fn project_trusted(host: &Host) -> bool {
 }
 
 impl App {
+    /// An app whose `async` calls run detached through `runner`, the `pi-rust-ext` binary.
+    pub fn with_runner(runner: PathBuf) -> App {
+        App {
+            runner: Some(runner),
+            ..App::default()
+        }
+    }
+
     pub fn layers(&self, host: &Host) -> Layers {
         let trusted = project_trusted(host);
         let project = host.project_dir();

@@ -165,14 +165,15 @@ pub fn ctx(cwd: &Path) -> Value {
     })
 }
 
-/// A fake `pi` that records its args, env, and pid in `dir`, prints `events`, then
-/// sleeps `hang_secs` when it is above 0.
+/// A fake `pi` that records its args, env, and pid in `dir`, writes the first event as its
+/// `--session` file, prints `events`, then sleeps `hang_secs` when it is above 0.
 pub fn fake_pi(dir: &Path, events: &[Value], hang_secs: u32) -> PathBuf {
     let stream: Vec<String> = events.iter().map(Value::to_string).collect();
     std::fs::write(dir.join("events.jsonl"), stream.join("\n") + "\n").unwrap();
     let d = dir.display();
     let script = format!(
         "#!/bin/sh\necho $$ > '{d}/pid'\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > '{d}/args'\n\
+prev=\nfor a in \"$@\"; do if [ \"$prev\" = --session ]; then mkdir -p \"$(dirname \"$a\")\"; head -n 1 '{d}/events.jsonl' > \"$a\"; fi; prev=$a; done\n\
 env | grep '^PI_' > '{d}/env'\npwd > '{d}/cwd'\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; sleep 0.04; done < '{d}/events.jsonl'\n\
 if [ {hang_secs} -gt 0 ]; then sleep {hang_secs}; fi\n"
     );

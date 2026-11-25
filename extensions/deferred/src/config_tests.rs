@@ -40,10 +40,44 @@ fn later_rules_and_layers_win() {
 }
 
 #[test]
+fn plan_mode_default_yields_to_global_and_matching_repo_rules() {
+    let default = Config::default();
+    let rule = default.rule(Kind::Tool, "plan_mode_complete").unwrap();
+    assert_eq!(
+        (rule.mode, rule.source.as_str()),
+        (Mode::On, DEFAULT_RULE_SOURCE)
+    );
+    assert_eq!(
+        default.mode(Kind::Tool, "plan_mode_question"),
+        Some(Mode::On)
+    );
+
+    let setting = json!({
+        "tools": { "*": "names" },
+        "repos": { "owner/repo": { "tools": { "plan_mode_complete": "off" } } }
+    });
+    let load = |repo| {
+        Config::load(&Layers {
+            setting: Some(&setting),
+            repo,
+            ..Layers::default()
+        })
+    };
+    assert_eq!(
+        load(None).mode(Kind::Tool, "plan_mode_complete"),
+        Some(Mode::Names)
+    );
+    assert_eq!(
+        load(Some("owner/repo")).mode(Kind::Tool, "plan_mode_complete"),
+        Some(Mode::Off)
+    );
+}
+
+#[test]
 fn bad_values_warn_and_keep_defaults() {
     let layer = json!({ "tools": { "a": "sometimes" }, "skills": [], "auto": -1, "maxResults": 0 });
     let config = Config::merge([("x", Some(&layer)), ("y", Some(&json!(3)))]);
-    assert!(config.rules.is_empty());
+    assert_eq!(config.rules, Config::default().rules);
     assert_eq!(config.auto_percent, Some(DEFAULT_AUTO_PERCENT));
     assert_eq!(config.max_results, DEFAULT_MAX_RESULTS);
     assert_eq!(config.warnings.len(), 4, "{:?}", config.warnings);
@@ -140,6 +174,7 @@ fn repo_rules_apply_after_global_and_before_project_rules() {
     assert_eq!(
         order,
         [
+            ("plan_mode_*", None),
             ("a", None),
             ("b", None),
             ("a", Some("Yannelli/Pi-Rust")),
@@ -152,7 +187,7 @@ fn repo_rules_apply_after_global_and_before_project_rules() {
     let elsewhere = Config::load(&layers(Some("someone/else")));
     assert_eq!(elsewhere.mode(Kind::Tool, "b"), Some(Mode::Names));
     assert!(elsewhere.rules.iter().all(|r| r.repo.is_none()));
-    assert_eq!(Config::load(&layers(None)).rules.len(), 4);
+    assert_eq!(Config::load(&layers(None)).rules.len(), 5);
 }
 
 #[test]

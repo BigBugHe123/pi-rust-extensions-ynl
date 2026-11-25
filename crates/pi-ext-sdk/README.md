@@ -1,6 +1,6 @@
 # pi-ext-sdk
 
-Created 2026-10-29. Last updated 2026-11-04.
+Created 2026-10-29. Last updated 2026-11-24.
 
 Rust SDK for pi-rust native extensions. pi starts the extension as a child process and talks JSON-RPC 2.0 with it, one JSON object per line on stdin and stdout. The protocol is in `docs/extensions/native-protocol.md` in the pi-rust repo (protocol version 1). The SDK runs the protocol loop. You register tools, commands, and event handlers, and you call pi through a `Host` handle.
 
@@ -51,7 +51,7 @@ pub fn main() -> ExitCode {
 | Method | Use |
 | --- | --- |
 | `Extension::new(name)` | Starts the builder. |
-| `.tool(ToolSpec, \|args: A, ctx: ToolCtx\| async { Ok(R) })` | Adds a tool. `A` is a serde type or `Value`. `R` is `ToolResult`, `String`, or `&str`. Bad arguments answer `-32602`. |
+| `.tool(ToolSpec, \|args: A, ctx: ToolCtx\| async { Ok(R) })` | Adds a tool. `A` is a serde type or `Value`. `R` is `ToolResult`, `String`, or `&str`. Bad arguments answer `-32602`. `ToolResult::terminate()` ends the agent loop after the tool batch when every result of the batch sets it. |
 | `.command(name, description, \|args: String, ctx: CommandCtx\| ...)` | Adds a slash command. `args` is the text after the name. |
 | `.completions(name, \|prefix, host\| ...)` | Adds argument completions to a command that you added before. |
 | `.shortcut(key, description, \|ctx: CommandCtx\| ...)` | Adds a shortcut such as `ctrl+shift+t`. |
@@ -80,7 +80,7 @@ All handlers are closures that return a future: `|args, ctx| async move { ... }`
 
 - All three: `host()`, `snapshot()` (the ctx snapshot: `cwd`, `has_ui`, `model`, `flags`, `session_id`, and more), `cancel_token()`, `is_cancelled()`, `cancelled().await`.
 - `ToolCtx`: `tool_call_id()`, `update(partial)` sends `tool.update`.
-- `EventCtx`: `name()`, `event()` (JSON), `event_as::<T>()`, `get(key)`. Typed views of common events are in `pi_ext_sdk::event_types`.
+- `EventCtx`: `name()`, `event()` (JSON), `event_as::<T>()`, `get(key)`, and `context().await` for `turn_end` and `agent_before_settle`: the preview of the whole model context, which pi sends only when asked (feature `contextEvents`; older hosts send it with the event). Typed views of common events are in `pi_ext_sdk::event_types`.
 
 ### Event replies
 

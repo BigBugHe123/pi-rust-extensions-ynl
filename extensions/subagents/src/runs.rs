@@ -5,11 +5,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use pi_ext_sdk::CancellationToken;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::stream::Progress;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
     Running,
@@ -54,9 +54,30 @@ pub struct Run {
     pub cancel: CancellationToken,
     /// The child's pi session file, `<run dir>/session.jsonl`.
     pub session_file: PathBuf,
+    /// A runner process runs the child, so the run outlives this process.
+    pub detached: bool,
 }
 
 impl Run {
+    pub fn new(id: &str, agent: &str, task: &str, background: bool) -> Run {
+        Run {
+            id: id.to_owned(),
+            agent: agent.to_owned(),
+            task: task.to_owned(),
+            background,
+            status: Status::Running,
+            started: Instant::now(),
+            finished: None,
+            progress: Progress::default(),
+            stderr: String::new(),
+            exit_code: None,
+            model: None,
+            cancel: CancellationToken::new(),
+            session_file: PathBuf::new(),
+            detached: false,
+        }
+    }
+
     pub fn dir(&self) -> &Path {
         self.session_file.parent().unwrap_or(Path::new(""))
     }
@@ -103,35 +124,25 @@ struct State {
 }
 
 impl Runs {
-    pub fn start(
-        &self,
-        agent: &str,
-        task: &str,
-        background: bool,
-        cancel: CancellationToken,
-    ) -> String {
+    /// A new run id: `sa`, the clock in hex, and a counter of this process. Another process can
+    /// make the same id; `store::claim_run_dir` makes it unique.
+    pub fn next_id(&self) -> String {
         let mut state = self.inner.lock().expect("runs lock");
         state.next += 1;
         let millis = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_millis());
-        let id = format!("sa{:x}{}", millis % 0xff_ffff, state.next);
-        state.runs.push(Run {
-            id: id.clone(),
-            agent: agent.to_owned(),
-            task: task.to_owned(),
-            background,
-            status: Status::Running,
-            started: Instant::now(),
-            finished: None,
-            progress: Progress::default(),
-            stderr: String::new(),
-            exit_code: None,
-            model: None,
-            cancel,
-            session_file: PathBuf::new(),
-        });
-        id
+        format!("sa{:x}{}", millis % 0xff_ffff, state.next)
+    }
+
+    /// Adds `run`; `false` when a run with its id is already there.
+    pub fn insert(&self, run: Run) -> bool {
+        let mut state = self.inner.lock().expect("runs lock");
+        let known = state.runs.iter().any(|known| known.id == run.id);
+        if !known {
+            state.runs.push(run);
+        }
+        !known
     }
 
     pub fn update<R>(&self, id: &str, change: impl FnOnce(&mut Run) -> R) -> Option<R> {
@@ -176,13 +187,17 @@ impl Runs {
         .unwrap_or(false)
     }
 
-    pub fn any_running(&self) -> bool {
+    /// Whether a run of this process runs; detached runs do not count.
+    pub fn any_in_process_running(&self) -> bool {
         let state = self.inner.lock().expect("runs lock");
-        state.runs.iter().any(|run| run.status == Status::Running)
+        let mut in_process = state.runs.iter().filter(|run| !run.detached);
+        in_process.any(|run| run.status == Status::Running)
     }
 
-    pub fn cancel_all(&self) {
-        for run in self.inner.lock().expect("runs lock").runs.iter() {
+    /// Cancels the runs of this process. Detached runs go on in their runner.
+    pub fn cancel_in_process(&self) {
+        let state = self.inner.lock().expect("runs lock");
+        for run in state.runs.iter().filter(|run| !run.detached) {
             run.cancel.cancel();
         }
     }

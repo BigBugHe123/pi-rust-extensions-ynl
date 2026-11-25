@@ -47,20 +47,44 @@ macro_rules! tool {
     }};
 }
 
+/// Like `tool!`, and the result `details` also hold the focused goal ([`with_goal_details`]).
+macro_rules! goal_tool {
+    ($ext:expr, $app:expr, $spec:expr, $handler:path) => {{
+        let app = $app.clone();
+        $ext.tool($spec, move |args, ctx| {
+            let app = app.clone();
+            async move {
+                let result = $handler(app.clone(), args, ctx).await?;
+                Ok(with_goal_details(&app, result))
+            }
+        })
+    }};
+}
+
+/// Adds [`view::details`] of the focused goal to the `details` of a goal tool result.
+fn with_goal_details(app: &app::App, mut result: ToolResult) -> ToolResult {
+    let goal = view::details(app.lock().focused());
+    let mut details = result.details.take().unwrap_or_else(|| json!({}));
+    if let (Value::Object(own), Value::Object(goal)) = (&mut details, goal) {
+        own.extend(goal);
+    }
+    result.details(details)
+}
+
 pub fn extension() -> Extension {
     let app = app::App::default();
     let [create, get, update, set_tasks, update_task] = specs::goal_tools();
     let [question, questionnaire, propose] = specs::draft_tools();
     let mut ext = Extension::new("goal");
-    ext = tool!(ext, app, create, tools::create_goal);
+    ext = goal_tool!(ext, app, create, tools::create_goal);
     let get_app = app.clone();
     ext = ext.tool(get, move |args: tools::GetArgs, _ctx: ToolCtx| {
-        let result = tools::get_goal(&get_app, args);
+        let result = with_goal_details(&get_app, tools::get_goal(&get_app, args));
         async move { Ok(result) }
     });
-    ext = tool!(ext, app, update, tools::update_goal);
-    ext = tool!(ext, app, set_tasks, tools::set_goal_tasks);
-    ext = tool!(ext, app, update_task, tools::update_goal_task);
+    ext = goal_tool!(ext, app, update, tools::update_goal);
+    ext = goal_tool!(ext, app, set_tasks, tools::set_goal_tasks);
+    ext = goal_tool!(ext, app, update_task, tools::update_goal_task);
     ext = tool!(ext, app, question, draft_tools::goal_question);
     ext = tool!(ext, app, questionnaire, draft_tools::goal_questionnaire);
     ext = tool!(ext, app, propose, draft_tools::propose_goal_draft);

@@ -43,6 +43,9 @@ pub struct ToolResult {
     pub details: Option<Value>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub is_error: bool,
+    /// When every result of a tool batch sets it, the agent loop ends after the batch.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub terminate: bool,
 }
 
 impl ToolResult {
@@ -69,6 +72,12 @@ impl ToolResult {
 
     pub fn failed(mut self) -> Self {
         self.is_error = true;
+        self
+    }
+
+    /// Asks the agent loop to stop after this tool batch (upstream `terminate: true`).
+    pub fn terminate(mut self) -> Self {
+        self.terminate = true;
         self
     }
 

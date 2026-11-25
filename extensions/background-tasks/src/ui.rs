@@ -1,16 +1,15 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pi_ext_sdk::prelude::*;
 use pi_ext_sdk::style::{self, Color};
 
+use crate::notify::{HostPi, Notifier};
 use crate::registry::{Registry, WidgetMode};
 use crate::task::{self, Status, Task};
 
 pub const WIDGET: &str = "background-tasks";
 pub const NOTIFICATION: &str = "background-task-notification";
-/// Bus channel that ends a `sleep` early when a notification arrives.
-const WAKE_CHANNEL: &str = "agent:wake";
 const WIDGET_ROWS: usize = 3;
 const EXPANDED_ROWS: usize = 20;
 /// More running tasks than this collapse the widget to one line.
@@ -208,37 +207,21 @@ pub async fn refresh(host: &Host, registry: &Registry) -> Result<()> {
     }
 }
 
-pub async fn notify_finished(host: &Host, registry: &Registry, task: &Task) -> Result<()> {
-    let message = CustomMessage::new(NOTIFICATION, notification_text(task))
-        .display(true)
-        .details(task)
-        .deliver_as(DeliverAs::FollowUp)
-        .trigger_turn(task.trigger_on_completion);
-    host.send_message(message).await?;
-    registry.mark_notified(&task.id);
-    if task.trigger_on_completion {
-        let wake =
-            json!({ "source": "background-tasks", "reason": format!("task {} finished", task.id) });
-        let _ = host.emit(WAKE_CHANNEL, wake).await;
-    }
-    Ok(())
-}
-
-/// Polls tasks every 500 ms, sends completion notifications and keeps the UI current.
+/// Polls tasks every 500 ms, sends and confirms completion notifications, and keeps the UI
+/// current.
 pub fn spawn_monitor(host: Host, registry: Arc<Registry>) {
     if !registry.monitor_once() {
         return;
     }
     tokio::spawn(async move {
+        let mut notifier = Notifier::default();
         let mut tick: u64 = 0;
         let mut last_state = String::new();
         loop {
-            let finished = registry.poll(tick % 4 == 0).await;
-            for task in finished {
-                if let Err(err) = notify_finished(&host, &registry, &task).await {
-                    pi_ext_sdk::warn!("cannot notify about task {}: {err}", task.id);
-                }
-            }
+            let pending = registry.poll(tick % 4 == 0).await;
+            notifier
+                .tick(&HostPi(&host), &registry, &pending, Instant::now())
+                .await;
             let tasks = registry.tasks();
             let state = format!("{:?}", status_text(&tasks));
             let running = tasks.iter().any(|t| t.status.is_running());

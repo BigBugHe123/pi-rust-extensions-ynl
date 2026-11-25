@@ -105,6 +105,7 @@ async fn event(base: Base, mut params: Value) -> Result<Value> {
         .get_mut("event")
         .map(Value::take)
         .unwrap_or(Value::Null);
+    let event_id = params.get("eventId").cloned();
     let mut current = original.clone();
     let (mut result, mut patch, mut first_error, mut succeeded) = (None, None, None, false);
     for handler in &handlers {
@@ -115,6 +116,7 @@ async fn event(base: Base, mut params: Value) -> Result<Value> {
             base: base.clone(),
             name: name.clone(),
             event: Arc::new(current.clone()),
+            event_id: event_id.clone(),
         };
         match handler(ctx).await {
             Ok(EventReply {

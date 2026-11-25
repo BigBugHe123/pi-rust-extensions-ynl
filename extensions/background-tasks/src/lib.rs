@@ -3,6 +3,8 @@
 mod active_work;
 mod command;
 mod identity;
+mod launch;
+mod notify;
 mod panel;
 mod process;
 mod registry;
@@ -10,6 +12,8 @@ mod task;
 mod tools;
 mod ui;
 
+#[cfg(test)]
+mod notify_tests;
 #[cfg(test)]
 mod process_tests;
 #[cfg(test)]
@@ -27,11 +31,21 @@ use serde::Deserialize;
 
 use registry::Registry;
 
+/// The extension's name, and its first argument of `pi-rust-ext`.
+pub const NAME: &str = "background-tasks";
 const POLICY_SECTION: &str = "pi_background_shell_policy";
-const POLICY: &str = "Use bg_run for long commands. Continue independent work or end the turn; <background-task-notification> reports terminal state. Do not sleep or poll bg_status/bg_logs to wait. Tasks stop on session quit/switch.";
+const POLICY: &str = "Use bg_run for long commands. Continue independent work or end the turn; <background-task-notification> reports terminal state. Do not sleep or poll bg_status/bg_logs to wait. Tasks stop on session switch, and on quit outside RPC mode; in RPC mode they outlive pi restarts.";
 
+/// `pi-rust-ext background-tasks`: the extension, whose tasks start through `--launch`, outside
+/// pi's process tree; `--launch <task dir> <cwd> <command>` starts one task and exits.
 pub fn main() -> ExitCode {
-    extension().run()
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if args.get(2).is_some_and(|flag| flag == launch::FLAG) {
+        return launch::main(&args[3..]);
+    }
+    let registry =
+        std::env::current_exe().map_or_else(|_| Registry::default(), Registry::with_launcher);
+    build(registry).run()
 }
 
 /// Binds the registry to the session directory and starts the monitor, once.
@@ -52,9 +66,23 @@ struct ShutdownEvent {
     reason: String,
 }
 
+/// pi's mode (`tui`, `rpc`, `json`, `print`) from the event's ctx, else from `initialize`.
+fn mode_of(ev: &EventCtx) -> Option<String> {
+    let from_ctx = ev.snapshot().mode.clone().filter(|mode| !mode.is_empty());
+    from_ctx.or_else(|| {
+        let init = ev.host().init()?;
+        Some(init.mode).filter(|mode| !mode.is_empty())
+    })
+}
+
+/// The extension with tasks that start in this process (no launcher).
 pub fn extension() -> Extension {
-    let registry = Arc::new(Registry::default());
-    let ext = Extension::new("background-tasks");
+    build(Registry::default())
+}
+
+fn build(registry: Registry) -> Extension {
+    let registry = Arc::new(registry);
+    let ext = Extension::new(NAME);
     let ext = tools::register(ext, registry.clone());
     let ext = command::register(ext, registry.clone());
     let sync = registry.clone();
@@ -66,9 +94,18 @@ pub fn extension() -> Extension {
         let registry = shutdown.clone();
         async move {
             let event: ShutdownEvent = ev.event_as().unwrap_or_default();
-            let stopped = registry.shutdown(&event.reason).await;
+            let file = ev.snapshot().session_file.as_deref();
+            let resumable = file.is_some_and(|file| !file.is_empty());
+            let keep = registry::keeps_survivors(&event.reason, mode_of(&ev).as_deref(), resumable);
+            let stopped = registry.shutdown(&event.reason, keep).await;
             if stopped > 0 {
                 pi_ext_sdk::info!("stopped {stopped} background task(s) on {}", event.reason);
+            }
+            let kept = registry.running().len();
+            if kept > 0 {
+                pi_ext_sdk::info!(
+                    "{kept} background task(s) keep running; the next start of this session adopts them"
+                );
             }
             Ok(())
         }

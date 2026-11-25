@@ -1,5 +1,10 @@
 use std::io::Write;
 use std::path::Path;
+use std::time::Duration;
+
+/// Age after which a temp file counts as left by a writer killed before its rename. A live write
+/// takes far less.
+const STALE_TMP: Duration = Duration::from_secs(60);
 
 /// `create_dir_all`, with mode 0700 for the directories it creates on unix.
 pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
@@ -19,6 +24,7 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         create_private_dir(parent)?;
     }
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+    remove_stale_tmp(path, name);
     let suffix = crate::oauth::random_hex(8);
     let tmp = path.with_file_name(format!(".{name}.{}.{suffix}.tmp", std::process::id()));
     let mut options = std::fs::OpenOptions::new();
@@ -37,6 +43,27 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let _ = std::fs::remove_file(&tmp);
     }
     renamed
+}
+
+/// Removes the temp files of `path` that writers killed before the rename left behind.
+fn remove_stale_tmp(path: &Path, name: &str) {
+    let Some(Ok(entries)) = path.parent().map(std::fs::read_dir) else {
+        return;
+    };
+    let prefix = format!(".{name}.");
+    for entry in entries.flatten() {
+        let file = entry.file_name();
+        let ours = file
+            .to_str()
+            .is_some_and(|file| file.starts_with(&prefix) && file.ends_with(".tmp"));
+        let stale = || {
+            let modified = entry.metadata().and_then(|meta| meta.modified());
+            modified.is_ok_and(|time| time.elapsed().is_ok_and(|age| age > STALE_TMP))
+        };
+        if ours && stale() {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 pub fn write_json(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
@@ -120,6 +147,29 @@ mod tests {
             assert_eq!(mode(&path), 0o600);
             assert_eq!(mode(&dir.join("a")), 0o700);
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn removes_temp_files_that_killed_writers_left() {
+        let dir = std::env::temp_dir().join(format!("sr-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        create_private_dir(&dir).unwrap();
+        let left = dir.join(".usage.json.123.abcd.tmp");
+        let live = dir.join(".usage.json.456.ef01.tmp");
+        let other = dir.join(".accounts.json.123.abcd.tmp");
+        for file in [&left, &live, &other] {
+            std::fs::write(file, "{}").unwrap();
+        }
+        let old = std::time::SystemTime::now() - STALE_TMP * 2;
+        for file in [&left, &other] {
+            let handle = std::fs::File::options().write(true).open(file).unwrap();
+            handle.set_modified(old).unwrap();
+        }
+        write_json(&dir.join("usage.json"), &serde_json::json!({})).unwrap();
+        assert!(!left.exists(), "a killed writer's temp file is removed");
+        assert!(live.exists(), "a write in progress keeps its temp file");
+        assert!(other.exists(), "temp files of other files stay");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

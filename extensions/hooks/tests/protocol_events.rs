@@ -21,6 +21,9 @@ fn env() -> Env {
         claude_dir: base.join("claude"),
         codex_home: base.join("codex"),
         codex_system: None,
+        claude_policy: None,
+        claude_os_policy: None,
+        codex_mdm: None,
         temp_dir: base.join("tmp"),
         agent_dir: Some(base.join("agent")),
     };
@@ -206,5 +209,59 @@ async fn mcp_tool_hook_blocks_through_mcp_call_tool() {
         result["result"],
         json!({ "block": true, "reason": "scan failed" })
     );
+    host.finish().await.unwrap();
+}
+
+#[tokio::test]
+async fn async_prompt_hooks_do_not_take_limit_slots() {
+    let env = env();
+    let mut handlers: Vec<Value> = (0..12)
+        .map(|n| json!({ "type": "prompt", "prompt": format!("sync {n}") }))
+        .collect();
+    handlers.push(json!({ "type": "prompt", "prompt": "async", "async": true }));
+    let settings = json!({ "hooks": { "PreToolUse": [{ "matcher": "Bash", "hooks": handlers }] } });
+    let options = json!({ "limits": { "promptAgentHooks": true } });
+    for (file, doc) in [
+        (env.paths.claude_dir.join("settings.json"), settings),
+        (env.dir.path().join("agent/ext/hooks.json"), options),
+    ] {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, doc.to_string()).unwrap();
+    }
+    let mut host = start(&env).await;
+    let ctx = hooks_ctx(&env.dir.path().join("repo"), false, true);
+    let call = json!({ "type": "tool_call", "toolCallId": "t1", "toolName": "bash", "input": { "command": "ls" } });
+    host.request(
+        1,
+        "event",
+        json!({ "name": "tool_call", "event": call, "ctx": ctx }),
+    )
+    .await;
+    let mut completions = Vec::new();
+    while completions.len() < 13 {
+        let message = host.recv().await;
+        match message.get("method").and_then(Value::as_str) {
+            Some("llm.complete") => completions.push(message["id"].clone()),
+            Some(_) if message.get("id").is_some() => {
+                host.answer(&message["id"].clone(), Value::Null).await;
+            }
+            _ => {}
+        }
+    }
+    for id in completions {
+        let reply = json!({ "message": {}, "text": r#"{"ok":true}"# });
+        host.answer(&id, reply).await;
+    }
+    let reply = loop {
+        let message = host.recv().await;
+        match message.get("method") {
+            None if message["id"] == 1 => break message,
+            Some(_) if message.get("id").is_some() => {
+                host.answer(&message["id"].clone(), Value::Null).await;
+            }
+            _ => {}
+        }
+    };
+    assert!(reply.get("error").is_none(), "{reply}");
     host.finish().await.unwrap();
 }

@@ -5,7 +5,7 @@ use pi_ext_sdk::style::{self, Color};
 
 use super::rows::{Inventory, Row, RuleRow, Scope, Why};
 use super::{Entry, Screen, TABS, Tab, Tone, View};
-use crate::config::{Kind, Mode};
+use crate::config::{DEFAULT_RULE_SOURCE, Kind, Mode};
 use crate::measure::{summary_line, wrap};
 
 const MAX_VISIBLE: usize = 10;
@@ -65,12 +65,13 @@ pub(super) fn why_marker(row: &Row) -> String {
         Why::Undeclared(_) => style::dim(" undeclared"),
         Why::Rule {
             pattern,
+            source,
             scope,
             repo,
-            ..
         } => {
             let at = match repo {
                 Some(repo) => format!("repo {repo}"),
+                None if source == DEFAULT_RULE_SOURCE => "built-in".to_owned(),
                 None => scope_word(scope.as_ref()).to_owned(),
             };
             match *pattern == row.name {

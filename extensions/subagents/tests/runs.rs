@@ -196,6 +196,130 @@ async fn parallel_tasks_return_sections() {
             (json!(1), json!("build"), json!(true))
         ]
     );
+    // The edxeth/pi-subagents batch that Paseo matches: `status: "batch"` and `children`.
+    let child = |run: &Value, agent: &str, task: &str| {
+        let id = run["id"].as_str().unwrap();
+        let session = d
+            .agent
+            .join(format!("ext/subagents/runs/{id}/session.jsonl"));
+        assert!(session.is_file(), "{}", session.display());
+        json!({ "id": id, "name": agent, "agent": agent, "task": task, "status": "completed",
+            "sessionFile": session.display().to_string() })
+    };
+    let runs = details["runs"].as_array().unwrap();
+    assert_eq!(details["status"], "batch");
+    assert_eq!(
+        details["children"],
+        json!([
+            child(&runs[0], "explore", "one"),
+            child(&runs[1], "build", "two")
+        ])
+    );
+    host.finish().await;
+}
+
+#[tokio::test]
+async fn parallel_tasks_without_every_session_file_have_no_batch() {
+    let d = dirs(&scripted_events("ok"), 0);
+    let mut host = TestHost::start(pi_ext_subagents::extension());
+    host.initialize(&d.agent, &d.cwd).await;
+    let params = json!({ "tasks": [{ "task": "one" }, { "task": "two", "cwd": "missing" }] });
+    host.request(1, "tool.execute", execute(params, &d.cwd))
+        .await;
+    let response = host.until_response(1).await;
+    let details = &response["result"]["details"];
+    let success: Vec<Value> = details["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["success"].clone())
+        .collect();
+    assert_eq!(success, [json!(true), json!(false)], "{details}");
+    assert!(
+        details.get("status").is_none() && details.get("children").is_none(),
+        "{details}"
+    );
+    host.finish().await;
+}
+
+#[tokio::test]
+async fn background_parallel_tasks_have_no_batch() {
+    let d = dirs(&scripted_events("ok"), 0);
+    let mut host = TestHost::start(pi_ext_subagents::extension());
+    host.initialize(&d.agent, &d.cwd).await;
+    let params = json!({ "tasks": [{ "task": "one" }, { "task": "two" }], "async": true });
+    host.request(1, "tool.execute", execute(params, &d.cwd))
+        .await;
+    let response = host.until_response(1).await;
+    let details = &response["result"]["details"];
+    assert_eq!(details["mode"], "parallel");
+    assert!(
+        details.get("status").is_none() && details.get("children").is_none(),
+        "{details}"
+    );
+    let message = host.until_method("session.sendMessage").await;
+    let details = &message["details"];
+    for run in details["runs"].as_array().unwrap() {
+        let session = std::path::Path::new(run["sessionFile"].as_str().unwrap());
+        assert!(session.is_file(), "{}", session.display());
+    }
+    assert!(
+        details.get("status").is_none() && details.get("children").is_none(),
+        "{details}"
+    );
+    host.finish().await;
+}
+
+#[tokio::test]
+async fn schema_lists_no_run_action_and_prepare_drops_it() {
+    let d = dirs(&scripted_events("x"), 0);
+    let mut host = TestHost::start(pi_ext_subagents::extension());
+    let init = host.initialize(&d.agent, &d.cwd).await;
+    let tools = init["tools"].as_array().unwrap();
+    let tool = tools.iter().find(|t| t["name"] == "subagent").unwrap();
+    let action = &tool["parameters"]["properties"]["action"];
+    assert_eq!(action["enum"], json!(["list", "status", "stop"]));
+    assert_eq!(action["description"], "Omit to run `task` or `tasks`");
+    assert_eq!(tool["prepareArguments"], true);
+    let cases = [
+        (
+            json!({ "action": "run", "agent": "explore", "task": "Find main" }),
+            json!({ "agent": "explore", "task": "Find main" }),
+        ),
+        (
+            json!({ "action": "status", "id": "sa1" }),
+            json!({ "action": "status", "id": "sa1" }),
+        ),
+        (
+            json!({ "agent": "explore", "task": "Find main" }),
+            json!({ "agent": "explore", "task": "Find main" }),
+        ),
+    ];
+    for (id, (args, prepared)) in (1..).zip(cases) {
+        host.request(
+            id,
+            "tool.prepare",
+            json!({ "name": "subagent", "args": args }),
+        )
+        .await;
+        assert_eq!(host.until_response(id).await["result"], prepared);
+    }
+    host.finish().await;
+}
+
+#[tokio::test]
+async fn run_action_still_runs() {
+    let d = dirs(&scripted_events("Found main at src/main.rs:3"), 0);
+    let mut host = TestHost::start(pi_ext_subagents::extension());
+    host.initialize(&d.agent, &d.cwd).await;
+    let params = json!({ "action": "run", "agent": "explore", "task": "Find main" });
+    host.request(1, "tool.execute", execute(params, &d.cwd))
+        .await;
+    let result = &host.until_response(1).await["result"];
+    assert_eq!(result["content"][0]["text"], "Found main at src/main.rs:3");
+    assert!(result.get("isError").is_none(), "{result}");
+    assert_eq!(result["details"]["mode"], "single");
+    assert_eq!(result["details"]["runs"][0]["status"], "completed");
     host.finish().await;
 }
 
@@ -274,8 +398,10 @@ async fn cancel_kills_the_child() {
     host.finish().await;
 }
 
+/// Runs that stay in pi (no runner binary here, or a session without an id) still end with it;
+/// `tests/detached.rs` covers the detached runs that outlive it.
 #[tokio::test]
-async fn shutdown_kills_a_child_that_ignores_sigterm() {
+async fn shutdown_kills_an_in_process_child_that_ignores_sigterm() {
     let d = dirs(&scripted_events("never"), 30);
     let script = std::fs::read_to_string(d.fake.join("fake-pi")).unwrap();
     let script = script.replacen("#!/bin/sh\n", "#!/bin/sh\ntrap '' TERM\n", 1);

@@ -5,6 +5,7 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 
+use super::shell::ShellKind;
 use crate::output::RawRun;
 
 pub const STDOUT_CAP: usize = 1024 * 1024;
@@ -21,8 +22,10 @@ pub struct CommandSpec {
     pub cwd: PathBuf,
     pub env: Vec<(String, String)>,
     pub timeout: Duration,
-    /// Codex runs shell-form hooks as `$SHELL -lc` (falls back to `/bin/sh`).
-    pub login_shell: bool,
+    /// The interpreter for shell form; see [`super::shell`].
+    pub shell: ShellKind,
+    /// pi's `shellPath` setting, used for bash on Windows.
+    pub shell_path: Option<String>,
 }
 
 pub async fn run_command(spec: CommandSpec) -> RawRun {
@@ -32,7 +35,7 @@ pub async fn run_command(spec: CommandSpec) -> RawRun {
             command.args(args);
             command
         }
-        None => shell_command(&spec.command, spec.login_shell),
+        None => shell_command(&spec.command, spec.shell, spec.shell_path.as_deref()),
     };
     if spec.cwd.is_dir() {
         command.current_dir(&spec.cwd);
@@ -114,7 +117,8 @@ impl Drop for GroupGuard {
 }
 
 #[cfg(unix)]
-fn shell_command(line: &str, login: bool) -> Command {
+fn shell_command(line: &str, kind: ShellKind, _shell_path: Option<&str>) -> Command {
+    let login = kind == ShellKind::Login;
     let shell = std::env::var("SHELL").ok().filter(|s| !s.trim().is_empty());
     let mut command = match (login, shell) {
         (true, Some(shell)) => Command::new(shell),
@@ -125,13 +129,31 @@ fn shell_command(line: &str, login: bool) -> Command {
     command
 }
 
+/// Git Bash (or PowerShell for `shell: "powershell"`), as Claude Code runs hooks on Windows;
+/// `cmd` only when neither is installed.
 #[cfg(windows)]
-fn shell_command(line: &str, _login: bool) -> Command {
-    let mut command = Command::new("cmd");
-    command
-        .args(["/d", "/s", "/c"])
-        .raw_arg(format!("\"{line}\""));
-    command
+fn shell_command(line: &str, kind: ShellKind, shell_path: Option<&str>) -> Command {
+    use super::shell::{Launch, System, windows_launch};
+    match windows_launch(kind, line, shell_path, &System) {
+        Launch::Program { program, args, env } => {
+            let mut command = Command::new(program);
+            command.args(args).envs(env);
+            command
+        }
+        Launch::Cmd { reason } => {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                pi_ext_sdk::warn!(
+                    "hooks: {reason}; shell-form hooks run with cmd and POSIX syntax fails"
+                );
+            });
+            let mut command = Command::new("cmd");
+            command
+                .args(["/d", "/s", "/c"])
+                .raw_arg(format!("\"{line}\""));
+            command
+        }
+    }
 }
 
 /// SIGTERM to the process group, then SIGKILL after the grace period.
@@ -202,7 +224,8 @@ mod tests {
             cwd: std::env::temp_dir(),
             env: vec![("HOOK_TEST".into(), "v".into())],
             timeout: Duration::from_secs(timeout),
-            login_shell: false,
+            shell: ShellKind::Posix,
+            shell_path: None,
         }
     }
 
@@ -281,5 +304,86 @@ mod tests {
                 .unwrap()
                 .starts_with("cannot start")
         );
+    }
+}
+
+/// Runs on the Windows CI runner, which has Git for Windows and PowerShell.
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    fn spec(command: &str, shell: ShellKind) -> CommandSpec {
+        CommandSpec {
+            command: command.into(),
+            args: None,
+            stdin: r#"{"tool_name":"Bash"}"#.into(),
+            cwd: std::env::temp_dir(),
+            env: vec![("HOOK_TEST".into(), "v".into())],
+            timeout: Duration::from_secs(30),
+            shell,
+            shell_path: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn posix_syntax_runs_in_bash() {
+        let run = run_command(spec(
+            "cat; echo \" $HOOK_TEST\"; echo err >&2; exit 2",
+            ShellKind::Posix,
+        ))
+        .await;
+        assert_eq!(run.error, None);
+        assert_eq!(run.code, Some(2), "stderr: {}", run.stderr);
+        assert_eq!(run.stdout.trim(), r#"{"tool_name":"Bash"} v"#);
+        assert_eq!(run.stderr.trim(), "err");
+    }
+
+    /// The hook Paseo writes to `~/.claude/settings.json` (issue yannelli/pi-rust#247).
+    #[tokio::test]
+    async fn paseo_stop_hook_is_a_no_op_outside_paseo() {
+        let mut s = spec(
+            r#"if [ -n "$PASEO_TERMINAL_ID" ]; then "${PASEO_HOOK_CLI:-paseo}" hooks claude Stop; fi"#,
+            ShellKind::Posix,
+        );
+        s.env.push(("PASEO_TERMINAL_ID".into(), String::new()));
+        let run = run_command(s).await;
+        assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+        assert_eq!(run.stderr, "");
+    }
+
+    #[tokio::test]
+    async fn login_bash_keeps_the_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = spec("pwd -W", ShellKind::Login);
+        s.cwd = dir.path().to_path_buf();
+        let run = run_command(s).await;
+        assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+        let want = dir.path().canonicalize().unwrap();
+        let got = std::path::PathBuf::from(run.stdout.trim().replace('/', "\\"))
+            .canonicalize()
+            .unwrap();
+        assert_eq!(got, want);
+    }
+
+    #[tokio::test]
+    async fn powershell_hooks_read_stdin_and_keep_quotes() {
+        let run = run_command(spec(
+            r#"$in = [Console]::In.ReadToEnd(); Write-Output "$in 'q' $env:HOOK_TEST"; exit 3"#,
+            ShellKind::PowerShell,
+        ))
+        .await;
+        assert_eq!(run.code, Some(3), "stderr: {}", run.stderr);
+        assert_eq!(run.stdout.trim(), r#"{"tool_name":"Bash"} 'q' v"#);
+    }
+
+    #[tokio::test]
+    async fn timeout_kills_the_tree() {
+        let mut s = spec("sleep 30", ShellKind::Posix);
+        s.timeout = Duration::from_secs(1);
+        let started = std::time::Instant::now();
+        let run = run_command(s).await;
+        assert_eq!(run.code, None);
+        assert!(run.error.unwrap().starts_with("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 }

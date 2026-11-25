@@ -13,7 +13,7 @@ use crate::agent::AgentDef;
 use crate::app::App;
 use crate::command::{self, ChildInput, Inherit, Overrides};
 use crate::exec;
-use crate::runs::Status;
+use crate::runs::{Run, Status};
 use crate::stream::Effect;
 
 pub const TODO_SCOPE_CHANNEL: &str = "todo:scope";
@@ -55,12 +55,18 @@ pub fn start(
     background: bool,
     cancel: CancellationToken,
 ) -> Started {
-    let id = app
-        .runs
-        .start(&job.agent.name, &job.task, background, cancel.clone());
+    let id = crate::store::claim_run_dir(&launch.runs_root, || app.runs.next_id()).unwrap_or_else(
+        |err| {
+            pi_ext_sdk::warn!("cannot make a run directory: {err}");
+            app.runs.next_id()
+        },
+    );
     let session_file = crate::store::session_file(&launch.runs_root, &id);
-    app.runs
-        .update(&id, |run| run.session_file = session_file.clone());
+    app.runs.insert(Run {
+        cancel: cancel.clone(),
+        session_file: session_file.clone(),
+        ..Run::new(&id, &job.agent.name, &job.task, background)
+    });
     let (publish_app, publish_host) = (app.clone(), host.clone());
     tokio::spawn(
         async move { crate::active_work::publish(&publish_app, &publish_host, false).await },
@@ -87,15 +93,13 @@ pub fn start(
     tokio::spawn(forward_events(host.clone(), events_rx));
     let scope_id = id.clone();
     let scope = move |status: &str, state: Value| {
-        let payload =
-            json!({ "scope": scope_id, "label": label, "status": status, "state": state });
-        (TODO_SCOPE_CHANNEL, payload)
+        (
+            TODO_SCOPE_CHANNEL,
+            scope_payload(&scope_id, &label, status, state),
+        )
     };
     let agent_type = job.agent.name.clone();
-    let _ = events_tx.send((
-        START_CHANNEL,
-        json!({ "agentId": id, "agentType": agent_type }),
-    ));
+    let _ = events_tx.send((START_CHANNEL, start_payload(&id, &agent_type)));
     let _ = events_tx.send(scope("running", Value::Null));
     let runs = app.runs.clone();
     let limit = launch.limit.clone();
@@ -126,15 +130,26 @@ pub fn start(
         runs.finish(&run_id, status, keep);
         crate::active_work::publish(&finish_app, &finish_host, false).await;
         let _ = events_tx.send(scope(status.as_str(), Value::Null));
-        let _ = events_tx.send((
-            STOP_CHANNEL,
-            json!({ "agentId": run_id, "agentType": agent_type, "status": status.as_str(),
-                "lastAssistantMessage": output }),
-        ));
+        let stop = stop_payload(&run_id, &agent_type, status, &output);
+        let _ = events_tx.send((STOP_CHANNEL, stop));
         changed.notify_one();
         status
     });
     Started { id, handle }
+}
+
+/// The `todo:scope` data of a run.
+pub fn scope_payload(id: &str, label: &str, status: &str, state: Value) -> Value {
+    json!({ "scope": id, "label": label, "status": status, "state": state })
+}
+
+pub fn start_payload(id: &str, agent: &str) -> Value {
+    json!({ "agentId": id, "agentType": agent })
+}
+
+pub fn stop_payload(id: &str, agent: &str, status: Status, output: &str) -> Value {
+    json!({ "agentId": id, "agentType": agent, "status": status.as_str(),
+        "lastAssistantMessage": output })
 }
 
 async fn forward_events(host: Host, mut rx: mpsc::UnboundedReceiver<(&'static str, Value)>) {

@@ -118,6 +118,8 @@ async fn anthropic_oauth_adds_claude_code_headers() {
         request.headers["anthropic-beta"],
         "claude-code-20250219,oauth-2025-04-20"
     );
+    assert_eq!(request.headers["user-agent"], "claude-cli/2.1.322");
+    assert_eq!(request.headers["x-app"], "cli");
     assert_eq!(
         request.body["system"][0]["text"],
         "You are Claude Code, Anthropic's official CLI for Claude."

@@ -195,7 +195,7 @@ pub fn extension(state: Arc<State>) -> Extension {
         }
     })
     .on("agent_before_settle", move |ev: EventCtx| {
-        routing::on_before_settle(ev.host().clone(), s10.clone(), ev.event().clone())
+        routing::on_before_settle(ev, s10.clone())
     })
     .on("agent_settled", move |ev: EventCtx| {
         let state = s11.clone();

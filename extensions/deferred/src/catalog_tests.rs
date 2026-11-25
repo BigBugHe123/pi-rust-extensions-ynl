@@ -16,6 +16,7 @@ fn tools() -> Vec<Value> {
         tool("mcp__gh__issue", "builtin:mcp", "builtin"),
         tool("mcp__gh__pr", "builtin:mcp", "builtin"),
         tool("web_fetch", "/ext/web", "extension"),
+        tool("plan_mode_complete", "/ext/plan-mode", "extension"),
         tool(TOOL, "/ext/deferred", "extension"),
     ]
 }
@@ -123,6 +124,7 @@ fn loaded_removed_and_restored_tools() {
 fn auto_defers_addon_tools_past_the_threshold() {
     let cost: usize = tools()[2..5].iter().map(tool_tokens).sum();
     let window = (cost * 100 / 10) as u64;
+    let active = ["read", "plan_mode_complete", "web_fetch"];
     let plan = run(
         json!({ "tools": { "web_fetch": "on" } }),
         &["read"],
@@ -130,11 +132,14 @@ fn auto_defers_addon_tools_past_the_threshold() {
         Some(window - 1),
     );
     assert!(!plan.auto, "explicit rules do not count toward auto");
-    let plan = run(json!({}), &["read"], json!({}), Some(window - 1));
+    let plan = run(json!({}), &active, json!({}), Some(window - 1));
     assert!(plan.auto);
+    assert_eq!(names(&plan.active), ["read", "plan_mode_complete", TOOL]);
     let auto: Vec<&str> = plan.items.iter().map(|i| i.name.as_str()).collect();
     assert_eq!(auto, ["mcp__gh__issue", "mcp__gh__pr", "web_fetch"]);
-    assert!(!run(json!({}), &["read"], json!({}), Some(window + 10)).auto);
+    let plan = run(json!({}), &active, json!({}), Some(window));
+    assert!(!plan.auto, "built-in on rules do not count toward auto");
+    assert_eq!(names(&plan.active), active);
     assert!(!run(json!({ "auto": false }), &["read"], json!({}), Some(10)).auto);
     assert!(!run(json!({}), &["read"], json!({}), None).auto);
 }

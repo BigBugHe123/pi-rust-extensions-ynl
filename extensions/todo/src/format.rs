@@ -228,8 +228,17 @@ pub fn details(
     op: &Op,
     scope: Option<&str>,
 ) -> TaskDetails {
+    // rpiv-todo readers such as Paseo accept only its six actions; `params.action` keeps the real one.
+    let action = match action {
+        Action::Move
+        | Action::AddPhase
+        | Action::UpdatePhase
+        | Action::SetGoal
+        | Action::DeletePhase => "update",
+        other => other.as_str(),
+    };
     TaskDetails {
-        action: action.as_str().into(),
+        action: action.into(),
         params,
         state: state.clone(),
         error: match op {
