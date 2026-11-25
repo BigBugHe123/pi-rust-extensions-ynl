@@ -966,7 +966,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ext-plan-mode"
-version = "0.5.24"
+version = "0.5.25"
 dependencies = [
  "pi-ext-ask-user-question",
  "pi-ext-e2e",
