@@ -327,8 +327,8 @@ fn rule_text(rule: &SubagentRule) -> String {
     }
 }
 
-/// Clears a field to its default; `false` when the field has no default.
-pub fn reset(field: Field, node: Node, workflow: &mut Workflow) -> bool {
+/// Clears a field to its default; fields without a default stay.
+pub fn reset(field: Field, node: Node, workflow: &mut Workflow) {
     if let Some(task) = task_mut(node, workflow) {
         match field {
             Field::Skill => task.skill = None,
@@ -338,9 +338,9 @@ pub fn reset(field: Field, node: Node, workflow: &mut Workflow) -> bool {
             Field::Until => task.until = None,
             Field::Confirm => task.confirm = false,
             Field::Optional => task.optional = false,
-            _ => return false,
+            _ => {}
         }
-        return true;
+        return;
     }
     match (field, node) {
         (Field::Context, Node::Step(i)) => workflow.steps[i].context = None,
@@ -351,7 +351,7 @@ pub fn reset(field: Field, node: Node, workflow: &mut Workflow) -> bool {
         (Field::MaxSteps, _) => workflow.planner.max_steps = None,
         _ => {
             let Some(scope) = scope_mut(node, workflow) else {
-                return false;
+                return;
             };
             match field {
                 Field::Model => scope.model = None,
@@ -364,11 +364,10 @@ pub fn reset(field: Field, node: Node, workflow: &mut Workflow) -> bool {
                 Field::SystemPrompt => scope.system_prompt = None,
                 Field::MaxTurns => scope.max_turns = None,
                 Field::MaxCost => scope.max_cost = None,
-                _ => return false,
+                _ => {}
             }
         }
     }
-    true
 }
 
 /// Edits a field with pi's dialogs or the panel picker.
@@ -461,11 +460,12 @@ pub async fn edit(
             .await?
         }
         Field::PlannerModel => {
-            match choose_model(ui, screen, "Planner model", false, "session model").await? {
-                Some(model) => {
+            match choose_model(ui, screen, "Planner model", true, "the session model").await? {
+                Some(Ok(model)) => {
                     workflow.planner.model = model;
                     true
                 }
+                Some(Err(err)) => return Ok(Edit::Invalid(err)),
                 None => false,
             }
         }
@@ -504,10 +504,11 @@ async fn edit_scope(field: Field, scope: &mut Scope, ui: &Ui, screen: &mut Scree
         )
         .await?
         {
-            Some(model) => {
+            Some(Ok(model)) => {
                 scope.model = model;
                 true
             }
+            Some(Err(err)) => return Ok(Edit::Invalid(err)),
             None => false,
         },
         Field::Thinking => {
@@ -534,12 +535,12 @@ async fn edit_scope(field: Field, scope: &mut Scope, ui: &Ui, screen: &mut Scree
                 })
                 .collect();
             let picked = picker::pick(
-                ui,
                 screen,
                 "Tools",
                 items,
                 scope.tools.as_deref(),
                 "pi defaults",
+                Some("no tools"),
             )
             .await?;
             set_list(&mut scope.tools, picked)
@@ -562,8 +563,15 @@ async fn edit_scope(field: Field, scope: &mut Scope, ui: &Ui, screen: &mut Scree
                 .into_iter()
                 .map(|(name, note)| Item::new(name, note))
                 .collect();
-            let picked =
-                picker::pick(ui, screen, "Skills", items, scope.skills.as_deref(), "all").await?;
+            let picked = picker::pick(
+                screen,
+                "Skills",
+                items,
+                scope.skills.as_deref(),
+                "all",
+                Some("no skills"),
+            )
+            .await?;
             set_list(&mut scope.skills, picked)
         }
         Field::Mcp => {
@@ -574,12 +582,12 @@ async fn edit_scope(field: Field, scope: &mut Scope, ui: &Ui, screen: &mut Scree
                 .map(|s| Item::new(s, ""))
                 .collect();
             let picked = picker::pick(
-                ui,
                 screen,
                 "MCP servers",
                 items,
                 scope.mcp.as_deref(),
                 "all",
+                Some("no MCP servers"),
             )
             .await?;
             set_list(&mut scope.mcp, picked)
@@ -668,7 +676,7 @@ async fn edit_task(field: Field, task: &mut Task, ui: &Ui, screen: &mut Screen) 
                 Some(Item::new(name, c["description"].as_str().unwrap_or("")))
             }));
             let Some(choice) =
-                picker::pick_one(ui, screen, "Run the prompt with a skill", items).await?
+                picker::pick_one(screen, "Run the prompt with a skill", items).await?
             else {
                 return Ok(Edit::Unchanged);
             };
@@ -801,33 +809,34 @@ pub async fn models(host: &Host) -> Vec<String> {
 
 const INHERIT: &str = "inherit";
 
-/// `Some(None)` for inherit, `None` when dismissed. Typed text that names no listed model is
-/// used as `provider/id`.
+/// `None` when dismissed, `Some(Ok(None))` for inherit, and `Some(Err)` for typed text that is
+/// not `provider/id`. Typed text that names no listed model is used as `provider/id`.
 pub async fn choose_model(
     ui: &Ui,
     screen: &mut Screen,
     title: &str,
     with_ask: bool,
     inherit: &str,
-) -> Result<Option<Option<String>>> {
+) -> Result<Option<std::result::Result<Option<String>, String>>> {
     let mut items = vec![Item::new(INHERIT, inherit)];
     if with_ask {
         items.push(Item::new(ASK, "choose the model when the run starts"));
     }
     items.extend(models(&ui.host).await.into_iter().map(|m| Item::new(m, "")));
-    let Some(choice) = picker::pick_one(ui, screen, title, items).await? else {
+    let Some(choice) = picker::pick_one(screen, title, items).await? else {
         return Ok(None);
     };
-    Ok(match choice.as_str() {
-        INHERIT => Some(None),
-        c if c == ASK
-            || c.split_once('/')
-                .is_some_and(|(p, id)| !p.is_empty() && !id.is_empty()) =>
-        {
-            Some(Some(choice))
-        }
-        _ => None,
-    })
+    let valid = |c: &str| {
+        c.split_once('/')
+            .is_some_and(|(p, id)| !p.is_empty() && !id.is_empty())
+    };
+    Ok(Some(match choice.as_str() {
+        INHERIT => Ok(None),
+        c if c == ASK || valid(c) => Ok(Some(choice)),
+        c => Err(format!(
+            "{c} is not a model. Use provider/id, such as anthropic/claude-sonnet-4-5."
+        )),
+    }))
 }
 
 const SUB_INHERIT: &str = "inherit · subagents as configured";
@@ -858,11 +867,12 @@ async fn subagents(
         .map(|t| Item::new(t, ""))
         .collect();
     let chosen: Vec<String> = current.iter().map(|r| r.agent.clone()).collect();
-    let Some(Picked::List(agents)) =
-        picker::pick(ui, screen, "Subagent types", types, Some(&chosen), "all").await?
-    else {
-        return Ok(None);
-    };
+    let agents =
+        match picker::pick(screen, "Subagent types", types, Some(&chosen), "all", None).await? {
+            Some(Picked::List(agents)) => agents,
+            Some(Picked::Inherit) => return Ok(Some(None)),
+            None => return Ok(None),
+        };
     let models = models(&ui.host).await;
     let mut rules = Vec::new();
     for agent in agents {
@@ -873,16 +883,16 @@ async fn subagents(
             .unwrap_or_default();
         let items = models.iter().map(|m| Item::new(m.clone(), "")).collect();
         let title = format!("Models for {agent} (none checked: any; the first is the default)");
-        let models = match picker::pick(ui, screen, &title, items, Some(&old.models), "any").await?
-        {
-            Some(Picked::List(list)) => list,
-            Some(Picked::Inherit) => Vec::new(),
-            None => return Ok(None),
-        };
+        let models =
+            match picker::pick(screen, &title, items, Some(&old.models), "any", None).await? {
+                Some(Picked::List(list)) => list,
+                Some(Picked::Inherit) => Vec::new(),
+                None => return Ok(None),
+            };
         let items = THINKING_LEVELS.iter().map(|t| Item::new(*t, "")).collect();
         let title = format!("Thinking levels for {agent} (none checked: any)");
         let thinking =
-            match picker::pick(ui, screen, &title, items, Some(&old.thinking), "any").await? {
+            match picker::pick(screen, &title, items, Some(&old.thinking), "any", None).await? {
                 Some(Picked::List(list)) => list,
                 Some(Picked::Inherit) => Vec::new(),
                 None => return Ok(None),

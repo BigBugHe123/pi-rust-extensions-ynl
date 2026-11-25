@@ -18,6 +18,8 @@ pub const INBOX_DIR: &str = "inbox";
 pub const TOUCH_EVERY: Duration = Duration::from_secs(2);
 /// A liveness file older than this means that pi is gone.
 const ALIVE_GRACE_MS: u64 = 10_000;
+/// Liveness files older than this are removed at startup.
+const PRUNE_AFTER_MS: u64 = 3_600_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -134,6 +136,21 @@ pub fn forget(root: &Path, pid: u32) {
     let _ = std::fs::remove_file(alive_file(root, pid));
 }
 
+/// Removes the liveness files of pi processes that quit without removing theirs.
+pub fn prune(root: &Path) {
+    let Ok(entries) = std::fs::read_dir(root.join("sessions")) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let touched = std::fs::read_to_string(entry.path())
+            .ok()
+            .and_then(|text| text.trim().parse::<u64>().ok());
+        if touched.is_none_or(|at| now_ms().saturating_sub(at) > PRUNE_AFTER_MS) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Whether the pi with this process id refreshed its liveness file recently.
 pub fn alive(root: &Path, pid: u32) -> bool {
     let Ok(text) = std::fs::read_to_string(alive_file(root, pid)) else {
@@ -182,7 +199,10 @@ mod tests {
         assert!(alive(&dir, 7) && !alive(&dir, 8));
         std::fs::write(alive_file(&dir, 7), "1").unwrap();
         assert!(!alive(&dir, 7));
-        forget(&dir, 7);
+        touch(&dir, 9);
+        prune(&dir);
+        assert!(!alive_file(&dir, 7).exists() && alive(&dir, 9));
+        forget(&dir, 9);
         let _ = std::fs::remove_dir_all(dir);
     }
 

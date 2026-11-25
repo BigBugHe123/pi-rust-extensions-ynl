@@ -14,7 +14,7 @@ use crate::launch::{Catalog, REPORT_SCHEMA, pi_binary};
 use crate::model::{Mode, Workflow};
 use crate::planner;
 use crate::runner::{self, LOG_FILE, MEMORY_FILE, SCHEMA_FILE};
-use crate::runs::{Origin, RunState, RunStatus, Runs, StepStatus, new_id, now_ms};
+use crate::runs::{self, Origin, RunState, RunStatus, Runs, StepStatus, new_id, now_ms};
 use crate::store::{self, Dirs};
 use crate::ui::widget;
 
@@ -41,6 +41,19 @@ struct Watch {
     paint: Option<crate::ui::theme::Paint>,
     /// The reason of `session_shutdown`.
     shutdown_reason: Option<String>,
+    /// Open `/workflows` panels. An approval dialog would sit over a panel, where an enter
+    /// meant for the panel would answer it, so approvals wait until the panel closes.
+    panels: usize,
+}
+
+/// Counts an open `/workflows` panel until it drops.
+pub struct PanelOpen(App);
+
+impl Drop for PanelOpen {
+    fn drop(&mut self) {
+        let mut watch = self.0.watch();
+        watch.panels = watch.panels.saturating_sub(1);
+    }
 }
 
 pub fn trusted(host: &Host) -> bool {
@@ -114,11 +127,12 @@ impl App {
     pub async fn start(
         &self,
         host: &Host,
-        workflow: Workflow,
+        mut workflow: Workflow,
         inputs: BTreeMap<String, String>,
         origin: Origin,
         background: bool,
     ) -> std::result::Result<String, String> {
+        workflow.clear_ask();
         let problems = workflow.problems();
         if !problems.is_empty() {
             return Err(problems.join("\n"));
@@ -173,16 +187,65 @@ impl App {
         self.runs.insert(state, dir.clone());
         self.runs.persist(&id);
         control::touch(&store::root(&host.agent_dir()), control::pi_pid());
-        spawn_runner(&dir).map_err(|e| format!("cannot start the runner: {e}"))?;
+        self.spawn(&id, &dir)?;
         Ok(id)
+    }
+
+    /// Starts the runner; when it cannot start, the run fails at once instead of looking active.
+    fn spawn(&self, id: &str, dir: &Path) -> std::result::Result<(), String> {
+        let Err(err) = spawn_runner(dir) else {
+            return Ok(());
+        };
+        let error = format!("cannot start the runner: {err}");
+        self.runs.update(id, |run| {
+            run.end(RunStatus::Failed);
+            run.error = Some(error.clone());
+        });
+        self.runs.persist(id);
+        // The caller shows the error; the run end needs no report.
+        if let Some(ended) = self.runs.get(id).and_then(|run| run.ended_ms) {
+            self.watch().reported.insert((id.to_owned(), ended));
+        }
+        Err(error)
+    }
+
+    /// A run by id, also one older than the runs the list keeps.
+    pub fn find(&self, host: &Host, id: &str) -> Option<RunState> {
+        self.runs.find(&self.runs_root(host), id)
+    }
+
+    /// Whether a runner runs `run` now: it holds the run's lock, or the run is active and its
+    /// heartbeat is recent. A runner that a suspended computer paused still holds the lock.
+    fn running(&self, host: &Host, run: &RunState) -> bool {
+        let dir = self.runs_root(host).join(&run.id);
+        (run.status.active() && !run.stale()) || runs::runner_running(&dir, run)
+    }
+
+    /// Deletes the directory of a run that does not run.
+    pub fn delete(&self, host: &Host, id: &str) -> std::result::Result<(), String> {
+        self.refresh(host);
+        let run = self.find(host, id).ok_or_else(|| format!("No run {id}."))?;
+        let dir = self.runs_root(host).join(id);
+        // The lock keeps a runner that another session starts now from running in a directory
+        // that goes away.
+        let lock = runs::lock_runner(&dir).ok().flatten();
+        if lock.is_none() || self.running(host, &run) {
+            return Err(format!("Run {id} still runs. Stop it first."));
+        }
+        #[cfg(windows)]
+        drop(lock);
+        std::fs::remove_dir_all(&dir)
+            .map_err(|e| format!("Cannot delete {}: {e}", dir.display()))?;
+        self.runs.remove(id);
+        Ok(())
     }
 
     /// Starts a new runner for a stopped, failed, or interrupted run; it continues at the task
     /// that did not finish.
     pub async fn resume(&self, host: &Host, id: &str) -> std::result::Result<(), String> {
         self.refresh(host);
-        let run = self.runs.get(id).ok_or_else(|| format!("no run {id}"))?;
-        if run.status.active() && !run.stale() {
+        let run = self.find(host, id).ok_or_else(|| format!("no run {id}"))?;
+        if self.running(host, &run) {
             return Err(format!("run {id} is still {}", run.status.label()));
         }
         if run.status == RunStatus::Done {
@@ -208,13 +271,16 @@ impl App {
             run.available = available;
             for step in &mut run.steps {
                 if step.status == StepStatus::Failed {
+                    // The failed task runs again with all its runs, without asking first or
+                    // waiting its delay again.
                     step.status = StepStatus::Pending;
+                    step.task_runs = step.task_runs.map(|_| 0);
                 }
             }
         });
         self.runs.persist(id);
         control::touch(&store::root(&host.agent_dir()), control::pi_pid());
-        spawn_runner(&dir).map_err(|e| format!("cannot start the runner: {e}"))
+        self.spawn(id, &dir)
     }
 
     fn send(&self, id: &str, command: &Command) -> std::result::Result<(), String> {
@@ -286,6 +352,11 @@ impl App {
         Ok(())
     }
 
+    pub fn panel_open(&self) -> PanelOpen {
+        self.watch().panels += 1;
+        PanelOpen(self.clone())
+    }
+
     pub fn on_shutdown_event(&self, reason: Option<String>) {
         self.watch().shutdown_reason = reason;
     }
@@ -325,8 +396,13 @@ impl App {
     async fn tick(&self, host: &Host, root: &Path, me: u32) {
         let runs = self.runs.all();
         for run in runs.iter().filter(|r| r.stale()) {
-            self.runs.update(&run.id, RunState::interrupt);
-            self.runs.persist(&run.id);
+            let Some(dir) = self.runs.dir(&run.id) else {
+                continue;
+            };
+            if !runs::runner_running(&dir, run) {
+                self.runs.update(&run.id, RunState::interrupt);
+                self.runs.persist(&run.id);
+            }
         }
         let ui = host.has_ui();
         for run in &runs {
@@ -351,7 +427,8 @@ impl App {
         if !ui {
             return;
         }
-        for run in &runs {
+        let panel = self.watch().panels > 0;
+        for run in runs.iter().filter(|_| !panel) {
             if let Some(approval) = run.approval.as_ref().filter(|_| run.status.active())
                 && self
                     .watch()
@@ -410,11 +487,12 @@ impl App {
             }
             return;
         }
-        self.watch().widget_shown = true;
+        // The theme loads again each time the widget appears, so a theme change shows.
+        let appears = !std::mem::replace(&mut self.watch().widget_shown, true);
         let width = host
             .surface_width(&format!("widget:{}", widget::KEY))
             .unwrap_or(100);
-        let cached = self.watch().paint.clone();
+        let cached = self.watch().paint.clone().filter(|_| !appears);
         let paint = match cached {
             Some(paint) => paint,
             None => {
@@ -484,7 +562,11 @@ fn create_run_dir(dir: &Path) -> std::io::Result<()> {
 /// so it outlives this extension and pi.
 fn spawn_runner(dir: &Path) -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
-    let log = std::fs::File::create(dir.join(LOG_FILE))?;
+    // Appends, so a second runner that finds the run taken keeps the log of the first.
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(LOG_FILE))?;
     let mut command = tokio::process::Command::new(exe);
     command
         .args(["workflows", runner::FLAG])

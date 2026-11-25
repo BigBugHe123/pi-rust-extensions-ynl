@@ -12,7 +12,11 @@ use tokio::process::{Child, Command};
 use crate::launch::Launch;
 
 const STDERR_TAIL: usize = 2000;
+/// The end of the agent's stderr that the runner keeps.
+const STDERR_KEEP: usize = 16 * 1024;
 const KILL_GRACE: Duration = Duration::from_secs(1);
+/// How long the runner reads the agent's output after the agent exits.
+const DRAIN: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -183,6 +187,10 @@ pub async fn run(
 ) -> (Outcome, Fold) {
     let mut fold = Fold::default();
     let mut command = Command::new(&launch.program);
+    // A step agent is no subagent, even when the pi that started the run is one.
+    for name in crate::policy::SUBAGENT_ENVS {
+        command.env_remove(name);
+    }
     command
         .args(&launch.args)
         .envs(launch.env.iter().map(|(k, v)| (k, v)))
@@ -203,37 +211,71 @@ pub async fn run(
         }
     };
     let stdout = child.stdout.take().expect("stdout is piped");
+    // Both pipes are read to their end, whatever bytes they carry, so the agent never blocks on
+    // a full pipe.
     let stderr = child.stderr.take().map(|mut stderr| {
         tokio::spawn(async move {
-            let mut text = String::new();
-            let _ = stderr.read_to_string(&mut text).await;
-            text
+            let mut kept: Vec<u8> = Vec::new();
+            let mut chunk = [0u8; 8192];
+            while let Ok(read) = stderr.read(&mut chunk).await
+                && read > 0
+            {
+                kept.extend_from_slice(&chunk[..read]);
+                if kept.len() > STDERR_KEEP {
+                    kept.drain(..kept.len() - STDERR_KEEP);
+                }
+            }
+            String::from_utf8_lossy(&kept).into_owned()
         })
     });
-    let mut lines = BufReader::new(stdout).lines();
+    let mut stdout = BufReader::new(stdout);
+    let mut line: Vec<u8> = Vec::new();
+    // A process that the agent started may keep its stdout open after pi exits, so the output
+    // is read only for a short while after the exit.
+    let mut exited: Option<std::io::Result<std::process::ExitStatus>> = None;
+    let mut drain_until: Option<tokio::time::Instant> = None;
     loop {
+        let read = async {
+            match drain_until {
+                Some(at) => tokio::time::timeout_at(at, stdout.read_until(b'\n', &mut line))
+                    .await
+                    .unwrap_or(Ok(0)),
+                None => stdout.read_until(b'\n', &mut line).await,
+            }
+        };
         tokio::select! {
             () = cancel.cancelled() => {
                 stop(&mut child).await;
                 return (Outcome::Cancelled, fold);
             }
-            line = lines.next_line() => match line {
-                Ok(Some(line)) => {
-                    let event = serde_json::from_str::<Value>(line.trim()).unwrap_or(Value::Null);
+            status = child.wait(), if exited.is_none() => {
+                exited = Some(status);
+                drain_until = Some(tokio::time::Instant::now() + DRAIN);
+            }
+            // `read_until` keeps the bytes of a line it did not finish in `line`, so a line
+            // continues after the exit branch wins.
+            read = read => match read {
+                Ok(read) if read > 0 => {
+                    let text = String::from_utf8_lossy(&line);
+                    let event = serde_json::from_str::<Value>(text.trim()).unwrap_or(Value::Null);
                     if fold.apply(&event) {
                         on_change(&fold);
                     }
+                    line.clear();
                 }
                 _ => break,
             },
         }
     }
-    let exit = tokio::select! {
-        () = cancel.cancelled() => {
-            stop(&mut child).await;
-            return (Outcome::Cancelled, fold);
-        }
-        exit = child.wait() => exit,
+    let exit = match exited {
+        Some(exit) => exit,
+        None => tokio::select! {
+            () = cancel.cancelled() => {
+                stop(&mut child).await;
+                return (Outcome::Cancelled, fold);
+            }
+            exit = child.wait() => exit,
+        },
     };
     let stderr = match stderr {
         Some(task) => tokio::time::timeout(Duration::from_secs(1), task)
@@ -385,6 +427,53 @@ mod tests {
             ]
         );
         assert!(!f.writing);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn invalid_bytes_and_a_full_stderr_do_not_stop_the_agent() {
+        let script = "printf '\\377\\n'; \
+            printf '{\"type\":\"output\",\"value\":{\"status\":\"done\",\"summary\":\"ok\"}}\\n'; \
+            yes \"$(printf '\\377')\" | head -c 300000 >&2; echo tail-end >&2";
+        let launch = Launch {
+            program: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            env: Vec::new(),
+            cwd: std::env::temp_dir(),
+            model: None,
+        };
+        let cancel = CancellationToken::new();
+        let run = run(&launch, &cancel, |_| {});
+        let (outcome, _) = tokio::time::timeout(Duration::from_secs(20), run)
+            .await
+            .expect("the agent output was read to its end");
+        assert_eq!(
+            outcome,
+            Outcome::Report {
+                status: Status::Done,
+                summary: "ok".into()
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_process_that_keeps_stdout_open_does_not_hold_the_run() {
+        let script = "sleep 30 & \
+            printf '{\"type\":\"output\",\"value\":{\"status\":\"done\",\"summary\":\"ok\"}}\\n'";
+        let launch = Launch {
+            program: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            env: Vec::new(),
+            cwd: std::env::temp_dir(),
+            model: None,
+        };
+        let cancel = CancellationToken::new();
+        let run = run(&launch, &cancel, |_| {});
+        let (outcome, _) = tokio::time::timeout(Duration::from_secs(10), run)
+            .await
+            .expect("the run ends soon after the agent exits");
+        assert!(matches!(outcome, Outcome::Report { .. }), "{outcome:?}");
     }
 
     #[test]

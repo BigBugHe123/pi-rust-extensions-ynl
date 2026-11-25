@@ -99,14 +99,25 @@ pub fn main(dir: Option<&str>) -> ExitCode {
 
 async fn serve(dir: PathBuf) -> ExitCode {
     let read = std::fs::read_to_string(dir.join(RUN_FILE)).map_err(|e| e.to_string());
-    let state =
-        match read.and_then(|t| serde_json::from_str::<RunState>(&t).map_err(|e| e.to_string())) {
-            Ok(state) => state,
-            Err(err) => {
-                pi_ext_sdk::error!("cannot read {}: {err}", dir.display());
-                return ExitCode::FAILURE;
-            }
-        };
+    let state = match read.and_then(|t| runs::parse_state(&t)) {
+        Ok(state) => state,
+        Err(err) => {
+            pi_ext_sdk::error!("cannot read {}: {err}", dir.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    // A second runner for the run (two sessions resumed it at once) leaves it to the first.
+    let _lock = match runs::lock_runner(&dir) {
+        Ok(Some(lock)) => Some(lock),
+        Ok(None) => {
+            pi_ext_sdk::warn!("another runner runs {}", dir.display());
+            return ExitCode::SUCCESS;
+        }
+        Err(err) => {
+            pi_ext_sdk::warn!("cannot lock {}: {err}", dir.display());
+            None
+        }
+    };
     ignore_hangup();
     // Commands and messages sent before this runner started belong to an earlier one.
     let _ = control::take(&dir);
@@ -124,7 +135,10 @@ async fn serve(dir: PathBuf) -> ExitCode {
         dir: dir.clone(),
     };
     ctx.runs.insert(state, dir.clone());
-    ctx.runs.update(&id, |run| run.heartbeat_ms = now_ms());
+    ctx.runs.update(&id, |run| {
+        run.heartbeat_ms = now_ms();
+        run.runner = std::process::id();
+    });
     ctx.runs.persist(&id);
     let (runs, control) = (ctx.runs.clone(), ctx.control.clone());
     let mut engine = tokio::spawn(drive(ctx, id.clone()));
@@ -139,7 +153,7 @@ async fn serve(dir: PathBuf) -> ExitCode {
             apply(&runs, &id, &control, command);
         }
         ticks += 1;
-        if ticks % 4 != 0 {
+        if !ticks.is_multiple_of(4) {
             continue;
         }
         let orphaned = runs.get(&id).is_some_and(|run| {
@@ -248,19 +262,28 @@ async fn replan(ctx: &Ctx, id: &str, index: usize) -> Result<(), Stop> {
     if ctx.control.cancel.is_cancelled() {
         return Err(Stop::Cancelled);
     }
-    ctx.runs.update(id, |run| match planned {
-        Ok(steps) => {
-            run.note = format!("The planner planned {} more step(s)", steps.len());
-            run.workflow.steps.truncate(index);
-            run.workflow.steps.extend(steps);
-            run.steps.truncate(index);
-            run.steps
-                .resize(run.workflow.steps.len(), StepRun::default());
+    let planned = match planned {
+        Ok(steps) => steps,
+        // Without any steps there is no plan to keep.
+        Err(err) if run.workflow.steps.is_empty() => {
+            return Err(Stop::Failed(format!("the planner failed: {err}")));
         }
         Err(err) => {
             pi_ext_sdk::warn!("workflow {id}: planner failed: {err}");
-            run.note = format!("The planner failed, so the plan stays: {err}");
+            ctx.runs.update(id, |run| {
+                run.note = format!("The planner failed, so the plan stays: {err}");
+            });
+            ctx.runs.persist(id);
+            return Ok(());
         }
+    };
+    ctx.runs.update(id, |run| {
+        run.note = format!("The planner planned {} more step(s)", planned.len());
+        run.workflow.steps.truncate(index);
+        run.workflow.steps.extend(planned);
+        run.steps.truncate(index);
+        run.steps
+            .resize(run.workflow.steps.len(), StepRun::default());
     });
     ctx.runs.persist(id);
     Ok(())
@@ -279,20 +302,36 @@ async fn run_step(ctx: &Ctx, id: &str, index: usize) -> Result<(), Stop> {
     for task_index in run.steps[index].tasks_done..step.tasks.len() {
         let task = &step.tasks[task_index];
         let label = task_label(&step, task_index);
-        if !task.confirm || confirm(ctx, id, index, &label).await? {
-            run_task(ctx, id, index, task, &label).await?;
+        let started = state(ctx, id)?.steps[index].task_runs;
+        if started.is_some() || !task.confirm || confirm(ctx, id, index, &label).await? {
+            run_task(ctx, id, index, task, &label, started).await?;
         }
-        ctx.runs
-            .update(id, |run| run.steps[index].tasks_done = task_index + 1);
+        ctx.runs.update(id, |run| {
+            run.steps[index].tasks_done = task_index + 1;
+            run.steps[index].task_runs = None;
+        });
         ctx.runs.persist(id);
     }
     Ok(())
 }
 
-async fn run_task(ctx: &Ctx, id: &str, index: usize, task: &Task, label: &str) -> Result<(), Stop> {
-    wait(ctx, id, task.delay(), format!("{label} starts")).await?;
+/// Runs a task; `started` holds the finished runs of a task that a resumed run continues.
+async fn run_task(
+    ctx: &Ctx,
+    id: &str,
+    index: usize,
+    task: &Task,
+    label: &str,
+    started: Option<u32>,
+) -> Result<(), Stop> {
+    if started.is_none() {
+        wait(ctx, id, task.delay(), format!("{label} starts")).await?;
+        ctx.runs
+            .update(id, |run| run.steps[index].task_runs = Some(0));
+        ctx.runs.persist(id);
+    }
     let max = task.max_runs();
-    for attempt in 0..max {
+    for attempt in started.unwrap_or(0)..max {
         if attempt > 0 {
             wait(
                 ctx,
@@ -305,13 +344,32 @@ async fn run_task(ctx: &Ctx, id: &str, index: usize, task: &Task, label: &str) -
         let run = state(ctx, id)?;
         let memory = (run.workflow.context_of(&run.workflow.steps[index]) == ContextMode::Memory)
             .then(|| std::fs::read_to_string(ctx.dir.join(MEMORY_FILE)).unwrap_or_default());
-        let prompt = compose(&run, index, task, attempt, memory.as_deref());
+        let step = &run.workflow.steps[index];
+        let session = session_file(&ctx.dir, index, step, run.workflow.context_of(step));
+        // An agent run that stopped before pi wrote the session gave the agent no header yet.
+        let fresh = run.steps[index].runs == 0 || !session.exists();
+        let prompt = compose(&run, index, task, attempt, fresh, memory.as_deref());
         let runs_text = if max > 1 {
             format!(" (run {} of {max})", attempt + 1)
         } else {
             String::new()
         };
-        match agent(ctx, id, index, &prompt).await {
+        let outcome = agent(ctx, id, index, &prompt).await;
+        // A goal that is met ends the task, so this run does not count; a runner that stops
+        // before the task is marked done checks the goal again instead of missing it.
+        let met = task.until.is_some()
+            && matches!(
+                outcome,
+                Outcome::Report {
+                    status: Status::Done,
+                    ..
+                }
+            );
+        if outcome != Outcome::Cancelled && !met {
+            ctx.runs
+                .update(id, |run| run.steps[index].task_runs = Some(attempt + 1));
+        }
+        match outcome {
             Outcome::Cancelled => return Err(Stop::Cancelled),
             Outcome::Failed(reason) => {
                 log(
@@ -477,6 +535,11 @@ async fn wait(ctx: &Ctx, id: &str, duration: Duration, note: String) -> Result<(
         ctx.runs.update(id, |run| run.wait_until_ms = None);
         return Ok(());
     }
+    // `notify_waiters` wakes only futures that wait already, so a skip sent right after the
+    // wait shows must find this one enabled.
+    let skipped = ctx.control.skip.notified();
+    tokio::pin!(skipped);
+    skipped.as_mut().enable();
     ctx.runs.update(id, |run| {
         run.status = RunStatus::Waiting;
         run.wait_until_ms = Some(now_ms() + duration.as_millis() as u64);
@@ -486,7 +549,7 @@ async fn wait(ctx: &Ctx, id: &str, duration: Duration, note: String) -> Result<(
     tokio::select! {
         () = ctx.control.cancel.cancelled() => return Err(Stop::Cancelled),
         () = tokio::time::sleep(duration) => {}
-        () = ctx.control.skip.notified() => {}
+        () = skipped => {}
     }
     ctx.runs.update(id, |run| {
         run.status = RunStatus::Running;
@@ -549,20 +612,21 @@ pub fn task_label(step: &Step, index: usize) -> String {
     }
 }
 
-/// The prompt of one agent run. The first run of a step gets the workflow header and the
-/// context; later runs continue the same session.
+/// The prompt of one agent run. A `fresh` run (the first of a step) gets the workflow header and
+/// the context; later runs continue the same session.
 pub fn compose(
     run: &RunState,
     index: usize,
     task: &Task,
     attempt: u32,
+    fresh: bool,
     memory: Option<&str>,
 ) -> String {
     let workflow = &run.workflow;
     let step = &workflow.steps[index];
     let context = workflow.context_of(step);
     let mut out = String::new();
-    if run.steps[index].runs == 0 {
+    if fresh {
         out.push_str(&format!(
             "# Workflow {}: step {} of {}, \"{}\"\n",
             workflow.name,
@@ -776,7 +840,7 @@ mod tests {
     fn first_run_gets_header_context_and_goal() {
         let run = run("handoff");
         let task = &run.workflow.steps[1].tasks[0];
-        let prompt = compose(&run, 1, task, 0, None);
+        let prompt = compose(&run, 1, task, 0, true, None);
         assert!(
             prompt.starts_with("# Workflow ship: step 2 of 2, \"ci\"\nShip it.\n"),
             "{prompt}"
@@ -790,30 +854,28 @@ mod tests {
             "{prompt}"
         );
         assert!(prompt.contains("waits 2m"), "{prompt}");
-        let first = compose(&run, 0, &run.workflow.steps[0].tasks[0], 0, None);
+        let first = compose(&run, 0, &run.workflow.steps[0].tasks[0], 0, true, None);
         assert!(first.ends_with("## Your task\nBuild X"), "{first}");
     }
 
     #[test]
     fn later_runs_continue_the_session() {
-        let mut run = run("memory");
-        run.steps[1].runs = 2;
+        let run = run("memory");
         let task = &run.workflow.steps[1].tasks[0];
-        let prompt = compose(&run, 1, task, 1, Some("note"));
+        let prompt = compose(&run, 1, task, 1, false, Some("note"));
         assert!(
             prompt.starts_with("Run 2 of 10. Check again.\n\nWatch CI"),
             "{prompt}"
         );
-        let skill = compose(&run, 1, &run.workflow.steps[1].tasks[1], 0, None);
+        let skill = compose(&run, 1, &run.workflow.steps[1].tasks[1], 0, false, None);
         assert_eq!(skill, "/skill:merge Merge");
-        run.steps[1].runs = 0;
-        let fresh = compose(&run, 1, task, 0, Some(""));
+        let fresh = compose(&run, 1, task, 0, true, Some(""));
         assert!(fresh.contains("## Shared memory\n(empty)"), "{fresh}");
         let long = format!("old fact\n{}\nnewest fact", "x".repeat(MEMORY_LIMIT));
-        let clipped = compose(&run, 1, task, 0, Some(&long));
+        let clipped = compose(&run, 1, task, 0, true, Some(&long));
         assert!(clipped.contains("(older notes are left out)") && clipped.contains("newest fact"));
         assert!(!clipped.contains("old fact"), "the oldest notes go first");
-        let none = compose(&self::run("none"), 1, task, 0, None);
+        let none = compose(&self::run("none"), 1, task, 0, true, None);
         assert!(!none.contains("Reports of earlier steps"), "{none}");
     }
 
