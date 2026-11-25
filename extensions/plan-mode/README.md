@@ -33,7 +33,7 @@ The status key `plan-mode` shows `plan active`, `plan discussion`, `plan ready`,
 
 Both tools stay registered in Normal mode, but they and the `tool_call` policy reject calls unless Plan mode is active.
 
-The model can only call the two tools while they are in the active tool list. When another extension takes them out, Plan mode turns them back on when it starts or restores a workflow, before each run, and before each model request, and warns once per workflow. The [deferred](../deferred/README.md) extension does this in its `auto` mode or with a `names` rule; add the rule `"tools": { "plan_mode_*": "on" }` to keep them listed. A change before a model request applies from the next turn, so when deferred runs after plan-mode the first request of a run can miss them. When pi cannot turn them on, Plan mode does not start, and a restored workflow does not resume.
+The model can only call the two tools while they are in the active tool list. When another extension takes them out, Plan mode turns them back on when it starts or restores a workflow, before each run, and before each model request, and warns once per workflow. A change before a model request applies from the next turn, so the first request of a run can miss them. The [deferred](../deferred/README.md) extension keeps them on with a built-in rule. A deferred rule of your own that matches them, such as `"*": "names"`, overrides it; add `"plan_mode_*": "on"` after that rule to keep them listed. When pi cannot turn them on, Plan mode does not start, and a restored workflow does not resume.
 
 ## Tool policy
 
