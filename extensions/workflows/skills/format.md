@@ -39,7 +39,7 @@ A workflow is one JSON object. The `workflow` tool saves it as `<name>.json` in 
 | `background` | `true`: runs keep going after pi quits, and a later pi session shows them and reports their end. Default `false`: a run stops when the pi that started it quits, and can resume later. Runs that an agent starts in print mode always run in the background. |
 | `context` | What a step agent learns about earlier steps. `handoff` (default): the reports of the earlier steps. `memory`: the reports, plus a shared notes file that each agent reads and adds to with the `workflow_memory` tool. `session`: all steps continue one conversation, which pi compacts when it grows. `none`: only its own tasks. |
 | `agent` | Default agent settings for all steps (see below). |
-| `planner` | Dynamic mode only: `instructions` (rules for the plan), `model` (`provider/id`, default: the session model), `maxSteps` (default 12). |
+| `planner` | Dynamic mode only: `instructions` (rules for the plan), `model` (`provider/id` or `ask`, default: the session model), `maxSteps` (default 12). |
 | `steps` | The steps, in run order. A dynamic workflow may start with none. |
 
 ### Step fields
@@ -79,4 +79,4 @@ A workflow is one JSON object. The `workflow` tool saves it as `<name>.json` in 
 | `confirm` | `true`: the task waits until the user approves it. Every pi session with a UI asks; `/workflows approve <run id>` answers from any pi, also `pi -p`. The run waits as long as it takes, and the wait survives pi restarts. Use it before deploys, merges to main, and destructive commands. |
 | `optional` | `true`: a failure skips the rest of the task, and the workflow continues. |
 
-Each agent run ends with a JSON report: `status` (`done`, `continue`, or `blocked`) and `summary`. `blocked`, an error, or a missed `until` goal stops the workflow unless the task is `optional`. A stopped or interrupted run can resume at the task that did not finish.
+Each agent run ends with a JSON report: `status` (`done`, `continue`, or `blocked`) and `summary`. `blocked`, an error, or a missed `until` goal stops the workflow unless the task is `optional`. A stopped or interrupted run can resume at the task that did not finish; a repeating or goal task keeps its run count.

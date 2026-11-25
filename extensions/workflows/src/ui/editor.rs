@@ -10,9 +10,18 @@ use pi_ext_sdk::style;
 use crate::model::{Step, Task, Workflow, slug};
 use crate::store::{Source, Stored};
 use crate::ui::fields::{self, Edit, Field, Node};
-use crate::ui::home::row_line;
-use crate::ui::theme::hints;
-use crate::ui::{Screen, Ui, one_line, run_view, short_model, start, window, wrap};
+use crate::ui::frame::{Frame, Tone, accent, muted, warning};
+use crate::ui::{IDLE, Screen, Ui, one_line, run_view, short_model, start, window, wrap};
+
+/// The editor puts the tree and the form side by side from this width.
+const SIDE_BY_SIDE: usize = 96;
+
+/// A question in the status line that the next key answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pending {
+    DeleteStep(usize),
+    Leave,
+}
 
 pub struct Editor {
     workflow: Workflow,
@@ -23,8 +32,8 @@ pub struct Editor {
     in_form: bool,
     row: usize,
     field: usize,
-    /// A result line: `(is_error, text)`.
-    message: Option<(bool, String)>,
+    message: Option<(Tone, String)>,
+    pending: Option<Pending>,
 }
 
 impl Editor {
@@ -38,6 +47,7 @@ impl Editor {
             row: 0,
             field: 0,
             message: None,
+            pending: None,
         }
     }
 
@@ -105,18 +115,18 @@ impl Editor {
 
 pub async fn run(ui: &Ui, screen: &mut Screen, mut editor: Editor) -> Result<()> {
     loop {
-        screen.draw(editor.render(ui, screen.width(), screen.rows()));
-        let Some(key) = screen.next(false).await else {
+        editor.show(ui, screen);
+        let Some(key) = screen.next(IDLE).await else {
             if screen.closed {
                 return Ok(());
             }
             continue;
         };
         editor.message = None;
-        let leave = if editor.in_form {
-            editor.form_key(ui, screen, &key).await?
-        } else {
-            editor.tree_key(ui, screen, &key).await?
+        let leave = match editor.pending.take() {
+            Some(pending) => editor.answer(ui, pending, &key).await?,
+            None if editor.in_form => editor.form_key(ui, screen, &key).await?,
+            None => editor.tree_key(ui, screen, &key).await?,
         };
         if leave || screen.closed {
             return Ok(());
@@ -133,6 +143,8 @@ impl Editor {
             Key::Char('J') => self.shift(true),
             k if k.is("up") || k.is("k") => self.row = self.row.saturating_sub(1),
             k if k.is("down") || k.is("j") => self.row = (self.row + 1).min(last),
+            k if k.is("pageup") => self.row = self.row.saturating_sub(10),
+            k if k.is("pagedown") => self.row = (self.row + 10).min(last),
             k if k.is("enter") || k.is("right") || k.is("tab") || k.is("l") => {
                 if self.node() == Node::AddStep {
                     self.add_step(ui).await?;
@@ -143,13 +155,13 @@ impl Editor {
             }
             k if k.is("a") => self.add_step(ui).await?,
             k if k.is("t") => self.add_task(ui).await?,
-            k if k.is("d") || k.is("delete") => self.delete(ui).await?,
+            k if k.is("d") || k.is("delete") => self.delete(),
             k if k.is("c") => self.duplicate(),
             k if k.is("s") || k.is("ctrl+s") => {
                 self.save(ui).await?;
             }
             k if k.is("r") => self.run_it(ui, screen).await?,
-            k if k.is_cancel() => return self.leave(ui).await,
+            k if k.is_cancel() || k.is("left") => return Ok(self.leave()),
             _ => {}
         }
         Ok(false)
@@ -164,28 +176,45 @@ impl Editor {
         }
         self.field = self.field.min(fields.len() - 1);
         let field = fields[self.field];
+        // An edit that ends with the value it had leaves the workflow saved.
+        let before = self.workflow.clone();
         match key {
             k if k.is("up") || k.is("k") => self.field = self.field.saturating_sub(1),
             k if k.is("down") || k.is("j") => self.field = (self.field + 1).min(fields.len() - 1),
             k if k.is("enter") || k.is("space") => {
                 match fields::edit(field, node, &mut self.workflow, ui, screen).await? {
-                    Edit::Changed => self.dirty = true,
-                    Edit::Invalid(message) => self.message = Some((true, message)),
+                    Edit::Changed => self.dirty |= self.workflow != before,
+                    Edit::Invalid(message) => self.message = Some((Tone::Error, message)),
                     Edit::Unchanged => {}
                 }
             }
-            k if k.is("x") || k.is("backspace") || k.is("delete") => {
-                if fields::reset(field, node, &mut self.workflow) {
-                    self.dirty = true;
-                }
+            k if k.is("x") || k.is("delete") => {
+                fields::reset(field, node, &mut self.workflow);
+                self.dirty |= self.workflow != before;
             }
             k if k.is("s") || k.is("ctrl+s") => {
                 self.save(ui).await?;
             }
             k if k.is("r") => self.run_it(ui, screen).await?,
-            k if k.is("ctrl+c") => return self.leave(ui).await,
+            k if k.is("ctrl+c") => return Ok(self.leave()),
             k if k.is_cancel() || k.is("left") || k.is("h") || k.is("tab") => self.in_form = false,
             _ => {}
+        }
+        Ok(false)
+    }
+
+    /// The answer to a question in the status line; `true` leaves the editor.
+    async fn answer(&mut self, ui: &Ui, pending: Pending, key: &Key) -> Result<bool> {
+        match pending {
+            Pending::DeleteStep(i) if *key == Key::Enter && i < self.workflow.steps.len() => {
+                let step = self.workflow.steps.remove(i);
+                self.dirty = true;
+                self.row = self.row.min(self.nodes().len() - 1);
+                self.message = Some((Tone::Good, format!("Deleted step {}.", step.name)));
+            }
+            Pending::Leave if key.is("s") => return self.save(ui).await,
+            Pending::Leave if key.is("d") => return Ok(true),
+            _ => self.message = Some((Tone::Info, "Cancelled.".into())),
         }
         Ok(false)
     }
@@ -203,12 +232,10 @@ impl Editor {
             return Ok(());
         }
         let mut task = Task::default();
-        fields::long_text(
-            ui,
-            &format!("First task of {name} ({{{{name}}}} becomes an input)"),
-            &mut task.prompt,
-        )
-        .await?;
+        let title = format!("First task of {name} ({{{{name}}}} becomes an input)");
+        if !fields::long_text(ui, &title, &mut task.prompt).await? {
+            return Ok(());
+        }
         let at = match self.node() {
             Node::Settings => 0,
             Node::Step(i) | Node::Task(i, _) => i + 1,
@@ -230,7 +257,7 @@ impl Editor {
     async fn add_task(&mut self, ui: &Ui) -> Result<()> {
         let Some(step) = self.step_of() else {
             self.message = Some((
-                true,
+                Tone::Warn,
                 "Select a step, then press t to add a task to it.".into(),
             ));
             return Ok(());
@@ -250,31 +277,22 @@ impl Editor {
         Ok(())
     }
 
-    async fn delete(&mut self, ui: &Ui) -> Result<()> {
+    fn delete(&mut self) {
         match self.node() {
-            Node::Step(i) => {
-                let step = &self.workflow.steps[i];
-                let question = format!("Delete step {}?", step.name);
-                if ui
-                    .host
-                    .confirm(&question, &format!("It has {} task(s).", step.tasks.len()))
-                    .await?
-                {
-                    self.workflow.steps.remove(i);
-                    self.dirty = true;
-                }
-            }
+            Node::Step(i) => self.pending = Some(Pending::DeleteStep(i)),
             Node::Task(s, _) if self.workflow.steps[s].tasks.len() == 1 => {
-                self.message = Some((true, "A step needs a task. Delete the step instead.".into()));
+                self.message = Some((
+                    Tone::Warn,
+                    "A step needs a task. Delete the step instead.".into(),
+                ));
             }
             Node::Task(s, t) => {
                 self.workflow.steps[s].tasks.remove(t);
                 self.dirty = true;
+                self.row = self.row.min(self.nodes().len() - 1);
             }
             _ => {}
         }
-        self.row = self.row.min(self.nodes().len() - 1);
-        Ok(())
     }
 
     fn shift(&mut self, down: bool) {
@@ -325,7 +343,7 @@ impl Editor {
     /// `true` when the workflow is saved.
     async fn save(&mut self, ui: &Ui) -> Result<bool> {
         if let Some(problem) = self.workflow.problems().first() {
-            self.message = Some((true, format!("Fix this first: {problem}")));
+            self.message = Some((Tone::Error, format!("Fix this first: {problem}")));
             return Ok(false);
         }
         let dirs = ui.app.dirs(&ui.host);
@@ -362,14 +380,14 @@ impl Editor {
                 if let Some(old) = self.path.take().filter(|old| *old != path) {
                     let _ = std::fs::remove_file(old);
                 }
-                self.message = Some((false, format!("Saved {}", path.display())));
+                self.message = Some((Tone::Good, format!("Saved {}.", path.display())));
                 self.path = Some(path);
                 self.workflow.name = name;
                 self.dirty = false;
                 Ok(true)
             }
             Err(err) => {
-                self.message = Some((true, err));
+                self.message = Some((Tone::Error, err));
                 Ok(false)
             }
         }
@@ -379,71 +397,54 @@ impl Editor {
         if self.dirty && !self.save(ui).await? {
             return Ok(());
         }
-        if let Some(id) = start::run_dialog(ui, screen, self.workflow.clone()).await? {
-            run_view::run(ui, screen, &id).await?;
+        match start::run_dialog(ui, screen, self.workflow.clone()).await? {
+            Ok(Some(started)) => {
+                run_view::run(ui, screen, &started.id, Some(started.message)).await?
+            }
+            Ok(None) => {}
+            Err(err) => self.message = Some((Tone::Error, err)),
         }
         Ok(())
     }
 
-    async fn leave(&mut self, ui: &Ui) -> Result<bool> {
-        if !self.dirty {
-            return Ok(true);
+    /// `true` leaves now; with unsaved changes the status line asks first.
+    fn leave(&mut self) -> bool {
+        if self.dirty {
+            self.pending = Some(Pending::Leave);
         }
-        let options = ["Save and close", "Close without saving", "Keep editing"];
-        match ui
-            .host
-            .select("The workflow has unsaved changes", &options)
-            .await?
-            .as_deref()
-        {
-            Some("Save and close") => self.save(ui).await,
-            Some("Close without saving") => Ok(true),
-            _ => Ok(false),
-        }
+        !self.dirty
     }
 
-    fn render(&self, ui: &Ui, width: usize, rows: usize) -> Vec<String> {
-        let p = &ui.paint;
+    fn show(&self, ui: &Ui, screen: &mut Screen) {
+        let width = screen.width();
         let name = if self.workflow.name.is_empty() {
-            "new workflow"
+            "New workflow"
         } else {
             &self.workflow.name
         };
         let state = if self.dirty {
-            p.fg("warning", "● unsaved")
+            "unsaved changes".to_owned()
         } else {
-            p.muted(&format!("saved · {}", self.source.label()))
+            format!("saved · {}", self.source.label())
         };
-        let mut lines = vec![p.header(&format!("❖ {name}"), &state, width), p.rule(width)];
-        let body = rows.saturating_sub(6).max(8);
-        if width >= 96 {
-            let left = (width * 2 / 5).clamp(32, 56);
-            let right = width - left - 3;
-            let tree = self.tree_lines(ui, left, body);
-            let form = self.form_lines(ui, right);
-            for i in 0..tree.len().max(form.len()).min(body) {
-                let l = style::fit(tree.get(i).map_or("", String::as_str), left);
-                let r = form.get(i).cloned().unwrap_or_default();
-                lines.push(format!("{l}{}{r}", p.dim(" │ ")));
+        let keys: &[(&str, &str)] = match (self.pending, self.in_form) {
+            (Some(Pending::DeleteStep(_)), _) => {
+                &[("enter", "delete"), ("any other key", "cancels")]
             }
-        } else {
-            lines.extend(self.tree_lines(ui, width, (body / 2).max(6)));
-            lines.push(p.rule(width));
-            lines.extend(self.form_lines(ui, width).into_iter().take(body / 2 + 4));
-        }
-        lines.push(p.rule(width));
-        lines.push(self.status_line(ui, width));
-        let keys: &[(&str, &str)] = if self.in_form {
-            &[
+            (Some(Pending::Leave), _) => &[
+                ("s", "save and close"),
+                ("d", "discard and close"),
+                ("any other key", "keeps editing"),
+            ],
+            (None, true) => &[
                 ("↑↓", "field"),
                 ("enter", "change"),
                 ("x", "reset"),
                 ("esc", "steps"),
                 ("s", "save"),
                 ("r", "run"),
-            ]
-        } else {
-            &[
+            ],
+            (None, false) => &[
                 ("↑↓", "move"),
                 ("enter", "edit"),
                 ("a", "add step"),
@@ -454,61 +455,112 @@ impl Editor {
                 ("s", "save"),
                 ("r", "run"),
                 ("esc", "back"),
-            ]
+            ],
         };
-        lines.push(hints(p, keys, width));
-        lines
+        let frame = Frame::new(name)
+            .summary(state)
+            .status(Some(self.status()))
+            .hints(keys);
+        let budget = frame.budget(width, screen.height());
+        let mut body = Vec::new();
+        if width >= SIDE_BY_SIDE {
+            let left = (width * 2 / 5).clamp(32, 56);
+            let right = width - left - 3;
+            let tree = self.tree_lines(left, budget);
+            let (form, _) = self.form_lines(ui, right, budget);
+            for i in 0..tree.len().max(form.len()) {
+                let l = style::fit(tree.get(i).map_or("", String::as_str), left);
+                let r = form.get(i).cloned().unwrap_or_default();
+                body.push(format!("{l}{}{r}", muted(" │ ")));
+            }
+        } else {
+            // The form gets the larger part while its fields are edited.
+            let share = if self.in_form { budget / 3 } else { budget / 2 };
+            body.extend(self.tree_lines(width, share.max(1)));
+            body.push(String::new());
+            let rest = budget.saturating_sub(body.len()).max(1);
+            let (form, focus) = self.form_lines(ui, width, rest);
+            let focus = body.len() + focus;
+            body.extend(form);
+            screen.show(&frame, body, focus);
+            return;
+        }
+        screen.show(&frame, body, 0);
     }
 
-    fn status_line(&self, ui: &Ui, width: usize) -> String {
-        let p = &ui.paint;
-        let text = match &self.message {
-            Some((true, text)) => p.fg("error", &format!(" ✗ {text}")),
-            Some((false, text)) => p.fg("success", &format!(" ✓ {text}")),
-            None => match self.workflow.problems().as_slice() {
-                [] => {
-                    let inputs = self.workflow.inputs();
-                    let inputs = if inputs.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" · inputs: {}", inputs.join(", "))
-                    };
-                    p.fg("success", &format!(" ✓ ready to run{inputs}"))
-                }
-                [only] => p.fg("warning", &format!(" ⚠ {only}")),
-                [first, rest @ ..] => {
-                    p.fg("warning", &format!(" ⚠ {first} (+{} more)", rest.len()))
-                }
-            },
+    fn status(&self) -> (Tone, String) {
+        let deleting = match self.pending {
+            Some(Pending::DeleteStep(i)) => self.workflow.steps.get(i),
+            _ => None,
         };
-        style::truncate(&text, width)
+        if let Some(step) = deleting {
+            return (
+                Tone::Warn,
+                format!(
+                    "Delete step {} and its {} task(s)? Enter deletes it; any other key cancels.",
+                    step.name,
+                    step.tasks.len()
+                ),
+            );
+        }
+        if self.pending == Some(Pending::Leave) {
+            return (
+                Tone::Warn,
+                "The workflow has unsaved changes. s saves and closes it, d closes it without saving, any other key keeps editing.".into(),
+            );
+        }
+        if let Some(message) = &self.message {
+            return message.clone();
+        }
+        match self.workflow.problems().as_slice() {
+            [] => {
+                let inputs = self.workflow.inputs();
+                let inputs = if inputs.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · inputs: {}", inputs.join(", "))
+                };
+                (Tone::Good, format!("✓ Ready to run{inputs}"))
+            }
+            [only] => (Tone::Warn, format!("⚠ {only}")),
+            [first, rest @ ..] => (Tone::Warn, format!("⚠ {first} (+{} more)", rest.len())),
+        }
     }
 
-    fn tree_lines(&self, ui: &Ui, width: usize, rows: usize) -> Vec<String> {
-        let p = &ui.paint;
+    /// The tree rows around the selected row, with `(i/n)` when they do not all fit.
+    fn tree_lines(&self, width: usize, rows: usize) -> Vec<String> {
         let nodes = self.nodes();
         let row = self.row.min(nodes.len() - 1);
+        let more = nodes.len() > rows;
+        let fit = if more {
+            rows.saturating_sub(1).max(1)
+        } else {
+            rows
+        };
         let mut lines = Vec::new();
-        for i in window(row, nodes.len(), rows) {
-            let (text, meta) = self.tree_row(ui, nodes[i]);
+        for i in window(row, nodes.len(), fit) {
+            let (text, meta) = self.tree_row(nodes[i]);
             let inner = width.saturating_sub(2);
-            let meta = p.muted(&meta);
+            let meta = muted(&meta);
             let room = inner.saturating_sub(style::visible_width(&meta) + 1);
             let text = style::truncate(&text, room);
             let gap =
                 inner.saturating_sub(style::visible_width(&text) + style::visible_width(&meta));
             let line = format!("{text}{}{meta}", " ".repeat(gap));
-            lines.push(match (i == row, self.in_form) {
-                (true, false) => row_line(ui, &line, true, width),
-                (true, true) => format!("{} {line}", p.accent("›")),
-                _ => format!("  {line}"),
-            });
+            let pointer = match (i == row, self.in_form) {
+                (true, false) => accent("→ "),
+                (true, true) => muted("› "),
+                _ => "  ".to_owned(),
+            };
+            lines.push(format!("{pointer}{line}"));
+        }
+        if more {
+            lines.push(muted(&format!("  ({}/{})", row + 1, nodes.len())));
         }
         lines
     }
 
-    fn tree_row(&self, ui: &Ui, node: Node) -> (String, String) {
-        let p = &ui.paint;
+    fn tree_row(&self, node: Node) -> (String, String) {
         let wf = &self.workflow;
         match node {
             Node::Settings => {
@@ -530,14 +582,14 @@ impl Editor {
                 meta.extend(scope.model.as_deref().map(short_model));
                 meta.extend(scope.thinking.as_deref());
                 let meta = if meta.is_empty() {
-                    "inherit".to_owned()
+                    "inherits".to_owned()
                 } else {
                     meta.join(" · ")
                 };
                 (
                     format!(
                         "{} {}",
-                        p.accent(&format!("{:>2}", i + 1)),
+                        accent(&format!("{:>2}", i + 1)),
                         style::bold(&step.name)
                     ),
                     meta,
@@ -548,31 +600,31 @@ impl Editor {
                 let letter = char::from(b'a' + (t % 26) as u8);
                 let mut badges: Vec<String> = Vec::new();
                 if let Some(skill) = &task.skill {
-                    badges.push(p.accent(&format!("/{skill}")));
+                    badges.push(accent(&format!("/{skill}")));
                 }
                 if let Some(delay) = &task.delay {
-                    badges.push(p.fg("warning", &format!("◷{delay}")));
+                    badges.push(warning(&format!("◷{delay}")));
                 }
                 if task.until.is_some() {
-                    badges.push(p.fg("warning", "↻goal"));
+                    badges.push(warning("↻goal"));
                 } else if task.max_runs() > 1 {
                     let every = task
                         .every
                         .as_deref()
                         .map(|e| format!("/{e}"))
                         .unwrap_or_default();
-                    badges.push(p.fg("warning", &format!("×{}{every}", task.max_runs())));
+                    badges.push(warning(&format!("×{}{every}", task.max_runs())));
                 }
                 if task.confirm {
-                    badges.push(p.fg("error", "ask"));
+                    badges.push(warning("asks"));
                 }
                 if task.optional {
-                    badges.push(p.dim("opt"));
+                    badges.push(muted("optional"));
                 }
                 let prompt = if task.prompt.trim().is_empty() {
-                    p.fg("warning", "(empty prompt)")
+                    warning("(empty prompt)")
                 } else {
-                    p.muted(&one_line(&task.prompt, 200))
+                    muted(&one_line(&task.prompt, 200))
                 };
                 let badges = if badges.is_empty() {
                     String::new()
@@ -580,69 +632,93 @@ impl Editor {
                     format!("{} ", badges.join(" "))
                 };
                 (
-                    format!("   {} {badges}{prompt}", p.dim(&letter.to_string())),
+                    format!("   {} {badges}{prompt}", muted(&letter.to_string())),
                     String::new(),
                 )
             }
-            Node::AddStep => (p.accent("+ Add step"), String::new()),
+            Node::AddStep => (accent("+ Add a step…"), String::new()),
         }
     }
 
-    fn form_lines(&self, ui: &Ui, width: usize) -> Vec<String> {
+    /// The form of the selected row, cut to `rows` lines around the selected field, and the
+    /// line of that field.
+    fn form_lines(&self, ui: &Ui, width: usize, rows: usize) -> (Vec<String>, usize) {
         let p = &ui.paint;
         let wf = &self.workflow;
         let node = self.node();
         let title = match node {
             Node::Settings => "Workflow settings".to_owned(),
             Node::Step(i) => format!("Step {} · {}", i + 1, wf.steps[i].name),
-            Node::Task(s, t) => format!("Task {} of {}", t + 1, wf.steps[s].name),
+            Node::Task(s, t) => format!(
+                "Task {} of {}",
+                char::from(b'a' + (t % 26) as u8),
+                wf.steps[s].name
+            ),
             Node::AddStep => "Add a step".to_owned(),
         };
-        let mut lines = vec![style::bold(&title)];
+        let mut head = vec![accent(&style::bold(&title))];
         let fields = fields::fields(node, wf);
         if fields.is_empty() {
-            lines.push(p.muted("Press enter to add a step at the end."));
-            return lines;
+            head.push(muted("Press enter to add a step at the end."));
+            return (head, 0);
         }
         let selected = self.field.min(fields.len() - 1);
+        let mut lines: Vec<String> = Vec::new();
+        let mut focus = 0;
         for (i, field) in fields.iter().enumerate() {
             if node == Node::Settings && *field == Field::Model {
-                lines.push(p.dim("Defaults for every step"));
+                lines.push(muted("Defaults for every step"));
             }
             if *field == Field::PlannerRules {
-                lines.push(p.dim("Planner"));
+                lines.push(muted("Planner"));
             }
             let value = fields::value(*field, node, wf, p);
-            let line = format!("{:<14}{value}", fields::label(*field));
-            lines.push(if self.in_form && i == selected {
-                p.selected(&format!("{} {line}", p.accent("❯")), width)
-            } else {
-                format!("  {line}")
-            });
+            let label = muted(&format!("{:<15}", fields::label(*field)));
+            let on = self.in_form && i == selected;
+            if on {
+                focus = lines.len();
+            }
+            let pointer = if on { accent("→ ") } else { "  ".to_owned() };
+            lines.push(format!("{pointer}{label}{value}"));
         }
-        lines.push(String::new());
+        let mut tail = vec![String::new()];
         let help = if self.in_form {
             fields::help(fields[selected])
         } else {
             "Press enter to edit this row."
         };
-        lines.extend(
+        tail.extend(
             wrap(help, width.saturating_sub(2))
                 .iter()
-                .map(|l| p.dim(&format!("  {l}"))),
+                .map(|l| muted(&format!("  {l}"))),
         );
         if let Node::Task(s, t) = node {
             let prompt = &wf.steps[s].tasks[t].prompt;
             if prompt.lines().count() > 1 || prompt.chars().count() > width.saturating_sub(18) {
-                lines.push(String::new());
-                lines.extend(
+                tail.push(String::new());
+                tail.extend(
                     wrap(prompt, width.saturating_sub(4))
                         .iter()
                         .take(8)
-                        .map(|l| format!("  {}", p.muted(l))),
+                        .map(|l| format!("  {}", muted(l))),
                 );
             }
         }
-        lines
+        // The fields keep the rows that the title, the position line, and the help leave.
+        let room = rows.saturating_sub(head.len() + tail.len() + 1).max(1);
+        let shown = window(focus, lines.len(), room);
+        let line = head.len() + focus - shown.start;
+        let mut out = head;
+        out.extend(lines[shown.clone()].iter().cloned());
+        if shown.end < lines.len() || shown.start > 0 {
+            out.push(muted(&if self.in_form {
+                format!("  ({}/{} fields)", selected + 1, fields.len())
+            } else {
+                format!("  ↓ {} more fields", lines.len() - shown.end)
+            }));
+        }
+        out.extend(tail);
+        out.truncate(rows);
+        (out, line)
     }
 }

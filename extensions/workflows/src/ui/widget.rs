@@ -52,6 +52,11 @@ pub fn lines(active: &[RunState], paint: &Paint, width: usize) -> Vec<String> {
     lines
 }
 
+/// The lines that `lines` draws for `active` runs.
+pub fn height(active: usize) -> usize {
+    2 * active.min(MAX_RUNS) + usize::from(active > MAX_RUNS)
+}
+
 /// `✓ implement › ◐ review › ○ ship`, or `◐ 2/3 review` when that does not fit.
 pub fn pipeline(run: &RunState, paint: &Paint, room: usize) -> String {
     let parts: Vec<String> = run
@@ -169,9 +174,9 @@ pub fn report_card(details: &Value, paint: &Paint, width: usize) -> Option<Vec<S
         report.status,
         RunStatus::Failed | RunStatus::Cancelled | RunStatus::Interrupted
     ) {
-        lines.push(
-            paint.dim("  /workflows runs, then r, resumes it at the task that did not finish"),
-        );
+        lines.push(paint.dim(
+            "  r in its run view (/workflows runs) resumes it at the task that did not finish",
+        ));
     }
     Some(
         lines
@@ -200,7 +205,7 @@ mod tests {
         assert_eq!(lines[0], "✗ ship  failed · 1m · $0.20 · wf-1");
         assert_eq!(lines[1], "  ✓ build   Built.");
         assert_eq!(lines[3], "  deploy is blocked");
-        assert!(lines[4].contains("then r, resumes it"), "{lines:?}");
+        assert!(lines[4].contains("resumes it at the task"), "{lines:?}");
         assert!(report_card(&json!({}), &Paint::default(), 80).is_none());
     }
 }

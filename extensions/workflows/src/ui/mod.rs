@@ -1,5 +1,6 @@
-//! `/workflows`: one panel with nested screens (home, editor, picker, run view). Each screen
-//! owns the panel while it is open and returns to the screen that opened it.
+//! `/workflows`: one panel with nested screens (home, editor, picker, run view), laid out like
+//! `/hooks`, `/deferred`, and `/claude-plugins`. Each screen owns the panel while it is open and
+//! returns to the screen that opened it.
 
 use std::ops::Range;
 use std::time::Duration;
@@ -13,6 +14,7 @@ use crate::ui::theme::Paint;
 
 mod editor;
 mod fields;
+pub mod frame;
 mod home;
 mod picker;
 mod run_view;
@@ -20,34 +22,61 @@ mod start;
 pub mod theme;
 pub mod widget;
 
+/// How often a screen without moving parts draws again, so its height follows the runs widget.
+pub const IDLE: Duration = Duration::from_secs(1);
+
 /// What every screen needs.
 pub struct Ui {
     pub app: App,
     pub host: Host,
+    /// The panel uses the basic terminal colors, like the other extension panels.
     pub paint: Paint,
 }
 
 /// The open panel: its size, the lines it shows, and whether pi closed it.
 pub struct Screen {
     panel: Panel,
+    /// The runs whose widget lines sit above the panel.
+    app: App,
     width: usize,
+    height: usize,
     shown: Vec<String>,
+    /// A key that arrived while the panel opened.
+    pending: Option<Key>,
     pub closed: bool,
 }
 
 impl Screen {
-    async fn open(host: &Host) -> Result<Self> {
-        let mut panel = host.panel(["Loading workflows…"]).open().await?;
+    async fn open(host: &Host, app: App) -> Result<Self> {
+        let loading = vec![
+            frame::muted(&"─".repeat(40)),
+            format!(" {}", frame::accent(&style::bold("Workflows"))),
+        ];
+        let mut panel = host.panel(loading).open().await?;
         // pi mounts the panel later and reports its first render with `ui.resize`; a dialog
         // opened before that would sit under the panel.
         let first = tokio::time::timeout(Duration::from_secs(1), panel.next_event()).await;
-        let closed = matches!(first, Ok(PanelEvent::Closed));
-        let width = panel.width().unwrap_or(100);
+        let snapshot = host.snapshot();
+        let terminal = |value: Option<u64>| value.map(|v| v as usize);
+        let width = panel
+            .width()
+            .or_else(|| terminal(snapshot.as_ref().and_then(|s| s.terminal_width)))
+            .unwrap_or(100);
+        let height = panel
+            .height()
+            .or_else(|| terminal(snapshot.as_ref().and_then(|s| s.terminal_height)))
+            .unwrap_or(40);
         Ok(Self {
             panel,
+            app,
             width,
+            height,
             shown: Vec::new(),
-            closed,
+            pending: match &first {
+                Ok(PanelEvent::Key(key)) => Some(key.clone()),
+                _ => None,
+            },
+            closed: matches!(first, Ok(PanelEvent::Closed)),
         })
     }
 
@@ -55,28 +84,29 @@ impl Screen {
         self.width.max(40)
     }
 
-    /// Rows a screen may use: most of the terminal, at least 14.
-    pub fn rows(&self) -> usize {
-        self.panel
-            .height()
-            .map_or(30, |h| h.saturating_sub(10))
-            .max(14)
+    /// The lines the panel may use: the terminal rows that pi and the runs widget leave.
+    pub fn height(&self) -> usize {
+        self.height
+            .saturating_sub(frame::HOST_ROWS + widget::height(self.app.runs.active()))
+            .max(1)
     }
 
-    /// The next key. `None` after a resize, a tick (with `tick`), or the panel closing.
-    pub async fn next(&mut self, tick: bool) -> Option<Key> {
-        let event = if tick {
-            tokio::select! {
-                event = self.panel.next_event() => Some(event),
-                () = tokio::time::sleep(Duration::from_millis(500)) => None,
-            }
-        } else {
-            Some(self.panel.next_event().await)
+    /// The next key. `None` after a resize, after `tick` passes, or when the panel closes.
+    pub async fn next(&mut self, tick: Duration) -> Option<Key> {
+        if let Some(key) = self.pending.take() {
+            return Some(key);
+        }
+        let event = tokio::select! {
+            event = self.panel.next_event() => Some(event),
+            () = tokio::time::sleep(tick) => None,
         };
         match event {
             Some(PanelEvent::Key(key)) => Some(key),
             Some(PanelEvent::Resize(width)) => {
                 self.width = width;
+                if let Some(height) = self.panel.height() {
+                    self.height = height;
+                }
                 None
             }
             Some(PanelEvent::Closed) => {
@@ -96,6 +126,12 @@ impl Screen {
         if lines != self.shown && self.panel.set_lines(lines.clone()).is_ok() {
             self.shown = lines;
         }
+    }
+
+    /// Draws `body` in `frame` at the panel size.
+    pub fn show(&mut self, frame: &frame::Frame, body: Vec<String>, focus: usize) {
+        let lines = frame.render(body, focus, self.width(), self.height());
+        self.draw(lines);
     }
 
     async fn close(self) -> Result<()> {
@@ -126,21 +162,31 @@ pub async fn command(app: App, args: String, ctx: CommandCtx) -> Result<()> {
         };
         return host.notify_info(text).await;
     }
-    let paint = Paint::load(&host).await;
-    let ui = Ui { app, host, paint };
-    let mut screen = Screen::open(&ui.host).await?;
+    let ui = Ui {
+        app,
+        host,
+        paint: Paint::default(),
+    };
+    // While the panel is open, approvals wait in it instead of a dialog over it.
+    let _open = ui.app.panel_open();
+    let mut screen = Screen::open(&ui.host, ui.app.clone()).await?;
+    let missing = |name: &str| Some((frame::Tone::Warn, format!("No workflow named {name:?}.")));
     match verb {
         "run" => match ui.app.dirs(&ui.host).find(rest) {
-            Some(stored) => {
-                start::run_dialog(&ui, &mut screen, stored.workflow).await?;
-            }
-            None => {
-                let message = format!("No workflow named {rest:?}.");
-                ui.host.notify_warning(message).await?;
-            }
+            Some(stored) => match start::run_dialog(&ui, &mut screen, stored.workflow).await? {
+                Ok(Some(started)) => {
+                    run_view::run(&ui, &mut screen, &started.id, Some(started.message)).await?;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    let status = Some((frame::Tone::Error, err));
+                    home::run(&ui, &mut screen, home::Tab::Workflows, status).await?;
+                }
+            },
+            None => home::run(&ui, &mut screen, home::Tab::Workflows, missing(rest)).await?,
         },
-        "" => home::run(&ui, &mut screen, home::Tab::Workflows).await?,
-        "runs" => home::run(&ui, &mut screen, home::Tab::Runs).await?,
+        "" => home::run(&ui, &mut screen, home::Tab::Workflows, None).await?,
+        "runs" => home::run(&ui, &mut screen, home::Tab::Runs, None).await?,
         "new" => editor::run(&ui, &mut screen, editor::Editor::blank()).await?,
         _ => {
             let name = if verb == "edit" { rest } else { args };
@@ -148,12 +194,7 @@ pub async fn command(app: App, args: String, ctx: CommandCtx) -> Result<()> {
                 Some(stored) => {
                     editor::run(&ui, &mut screen, editor::Editor::from_stored(stored)).await?
                 }
-                None => {
-                    ui.host
-                        .notify_warning(format!("No workflow named {name:?}."))
-                        .await?;
-                    home::run(&ui, &mut screen, home::Tab::Workflows).await?;
-                }
+                None => home::run(&ui, &mut screen, home::Tab::Workflows, missing(name)).await?,
             }
         }
     }
@@ -225,6 +266,11 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
         lines.push(line);
     }
     lines
+}
+
+/// The glyph of a run status in the panel colors.
+pub fn glyph(status: crate::runs::RunStatus) -> String {
+    Paint::default().run_glyph(status)
 }
 
 /// `provider/claude-sonnet-4-5` without the provider, for narrow columns.

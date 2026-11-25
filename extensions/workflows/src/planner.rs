@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::child::{self, Outcome};
 use crate::launch::Launch;
-use crate::model::{Step, Workflow, step_problems};
+use crate::model::{ASK, Step, Workflow, step_problems};
 use crate::policy::RUN_ENV;
 use crate::runs::RunState;
 use crate::store::FORMAT;
@@ -101,6 +101,7 @@ pub async fn plan(
         .planner
         .model
         .clone()
+        .filter(|m| m != ASK)
         .or(state.parent_model.clone());
     let mut args: Vec<String> = [
         "--mode",

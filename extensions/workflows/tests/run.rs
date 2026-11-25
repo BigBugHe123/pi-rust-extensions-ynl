@@ -17,7 +17,9 @@ dir="$(dirname "$0")"
 sleep "${FAKE_PI_SLEEP:-0}"
 n=$(ls "$dir" | grep -c '^call-')
 printf '%s\0' "$@" > "$dir/call-$n"
-for a in "$@"; do last="$a"; done
+# Like pi, write the session file that `--session` names.
+prev=""
+for a in "$@"; do [ "$prev" = "--session" ] && touch "$a"; prev="$a"; last="$a"; done
 status=done
 case "$last" in
   *FAIL*) echo boom >&2; exit 1 ;;
@@ -634,4 +636,47 @@ fn approvals_wait_without_a_ui_and_any_session_can_answer() {
     assert!(log.contains("ship 2/2: approved by the user"), "{log}");
     assert_eq!(calls(&s.fake_dir).len(), 2);
     drop(s.root);
+}
+
+#[test]
+fn resume_continues_a_repeating_task_at_its_run_count() {
+    let s = setup();
+    let mut ext = s.ext(&[], false);
+    let workflow = json!({ "name": "watch", "steps": [{ "name": "logs", "tasks": [
+        { "prompt": "Check the logs", "repeat": 3, "every": "1h", "delay": "1h" }
+    ] }] });
+    let id = run_id(&ext.tool(json!({ "action": "run", "workflow": workflow })));
+    let skip = |run: &str| {
+        let commands = s.run_dir(run).join("commands");
+        std::fs::write(
+            commands.join("0000000000001-1-0.json"),
+            r#"{"type":"skip"}"#,
+        )
+        .unwrap();
+    };
+    s.wait_run(&id, "waiting its delay", |r| r["waitUntilMs"].is_u64());
+    skip(&id);
+    s.wait_run(&id, "waiting after run 1", |r| {
+        r["steps"][0]["taskRuns"] == 1 && r["waitUntilMs"].is_u64()
+    });
+    ext.tool(json!({ "action": "stop", "id": id }));
+    ext.wait_for_report();
+
+    ext.tool(json!({ "action": "resume", "id": id }));
+    for runs in [1, 2] {
+        s.wait_run(&id, "waiting between runs", |r| {
+            r["steps"][0]["taskRuns"] == runs && r["waitUntilMs"].is_u64()
+        });
+        skip(&id);
+    }
+    let report = ext.wait_for_report();
+    let text = report["content"].as_str().unwrap();
+    assert!(text.contains("Workflow **watch** finished"), "{text}");
+    let calls = calls(&s.fake_dir);
+    assert_eq!(calls.len(), 3, "resume runs the two runs that are left");
+    assert!(
+        calls[1].last().unwrap().starts_with("Run 2 of 3."),
+        "{:?}",
+        calls[1].last()
+    );
 }

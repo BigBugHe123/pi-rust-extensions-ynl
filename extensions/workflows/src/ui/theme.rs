@@ -1,7 +1,6 @@
-//! Colors from pi's theme, with basic ANSI colors for hosts without `ui.getTheme`, and the
-//! status glyphs.
+//! Colors from pi's theme for the widget and the run report, the basic ANSI colors without a
+//! theme (the panel uses those, like the other extension panels), and the status glyphs.
 
-use pi_ext_sdk::style;
 use pi_ext_sdk::{Host, Theme};
 
 use crate::runs::{RunStatus, StepStatus, now_ms};
@@ -52,30 +51,6 @@ impl Paint {
         self.fg("dim", text)
     }
 
-    /// A full-width selected row on pi's selection background. The terminal palette theme has
-    /// no color for it and may not know the terminal's background, so the row is bold there;
-    /// hosts without a theme get inverse video.
-    pub fn selected(&self, line: &str, width: usize) -> String {
-        let line = style::fit(line, width);
-        match &self.theme {
-            Some(theme) if theme.bg_rgb("selectedBg").is_some() => theme.bg("selectedBg", &line),
-            Some(_) => style::bold(&line),
-            None => style::inverse(&line),
-        }
-    }
-
-    pub fn rule(&self, width: usize) -> String {
-        self.fg("borderMuted", &"─".repeat(width))
-    }
-
-    /// A heading line: the bold title on the left, `right` (styled by the caller) on the right.
-    pub fn header(&self, title: &str, right: &str, width: usize) -> String {
-        let title = style::bold(&self.accent(title));
-        let gap =
-            width.saturating_sub(style::visible_width(&title) + style::visible_width(right) + 1);
-        style::truncate(&format!("{title}{}{right} ", " ".repeat(gap)), width)
-    }
-
     pub fn step_glyph(&self, status: StepStatus) -> String {
         match status {
             StepStatus::Pending => self.dim("○"),
@@ -99,13 +74,4 @@ impl Paint {
 
 fn spinner() -> &'static str {
     SPIN[(now_ms() / 250 % SPIN.len() as u64) as usize]
-}
-
-/// Hint line: `key action · key action`.
-pub fn hints(paint: &Paint, pairs: &[(&str, &str)], width: usize) -> String {
-    let parts: Vec<String> = pairs
-        .iter()
-        .map(|(key, action)| format!("{} {}", paint.fg("text", key), paint.dim(action)))
-        .collect();
-    style::truncate(&format!(" {}", parts.join(&paint.dim(" · "))), width)
 }

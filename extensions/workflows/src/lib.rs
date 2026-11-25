@@ -40,7 +40,7 @@ pub fn extension() -> Extension {
         )
         .completions("workflows", |prefix: String, host: Host| async move {
             let dirs = store::Dirs::new(&host.agent_dir(), &host.project_dir(), app::trusted(&host));
-            let mut items: Vec<String> = vec!["new".into(), "runs".into()];
+            let mut items: Vec<String> = vec!["new".into(), "runs".into(), "approve".into()];
             for stored in dirs.load().0 {
                 items.push(format!("run {}", stored.workflow.name));
                 items.push(format!("edit {}", stored.workflow.name));
@@ -71,6 +71,7 @@ pub fn extension() -> Extension {
             let app = start_app.clone();
             async move {
                 runs::prune(&app.runs_root(&host));
+                control::prune(&store::root(&host.agent_dir()));
                 app.watch_runs(host).await;
                 Ok(())
             }
