@@ -2,6 +2,17 @@
 
 All notable changes to pi-rust-extensions are documented here. Versions follow [Semantic Versioning](https://semver.org/); before 1.0, breaking changes bump the minor version.
 
+## [0.5.26] - 2026-11-25
+
+### Added
+
+- **plan-mode:** keep the plan tools visible and warn about tools the agent cannot use ([52d52bb](https://github.com/yannelli/pi-rust-extensions/commit/52d52bb668fabfc7e14d7ad8679feb5f5d7f976e))
+- **plan-mode:** add codex-like /plan mode ported from @narumitw/pi-plan-mode ([d8fe1dc](https://github.com/yannelli/pi-rust-extensions/commit/d8fe1dc730b20b33ea0837b4780b40bee4dc75d0))
+
+### Fixed
+
+- **plan-mode:** check tools at call time and limit only typed answers ([b64eaef](https://github.com/yannelli/pi-rust-extensions/commit/b64eaef0438fe8a10b17647f4d91bfd6a78de057))
+
 ## [0.5.25] - 2026-11-24
 
 ### Fixed
