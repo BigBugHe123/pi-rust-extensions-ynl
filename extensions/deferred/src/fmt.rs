@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::{Body, Item, Plan, TOOL};
-use crate::config::{Config, Kind, Mode};
+use crate::config::{Config, DEFAULT_RULE_SOURCE, Kind, Mode};
 
 /// The `deferred` prompt section; `None` when nothing is searchable.
 pub fn index(items: &[Item]) -> Option<String> {
@@ -128,6 +128,9 @@ pub fn status(
     plan: Option<&Plan>,
     loaded: &[String],
 ) -> String {
+    let sources = std::iter::once(DEFAULT_RULE_SOURCE)
+        .chain(sources.iter().map(String::as_str))
+        .collect::<Vec<_>>();
     let mut lines = vec![format!("deferred config: {}", sources.join(", "))];
     lines.push(match config.auto_percent {
         Some(p) => {
@@ -140,12 +143,13 @@ pub fn status(
     }
     lines.push(format!("rules: {}", config.rules.len()));
     for rule in &config.rules {
-        let repo = rule
-            .repo
-            .as_ref()
-            .map_or(String::new(), |r| format!(" [repo {r}]"));
+        let source = match rule.repo.as_deref() {
+            Some(repo) => format!(" [repo {repo}]"),
+            None if rule.source == DEFAULT_RULE_SOURCE => format!(" [{DEFAULT_RULE_SOURCE}]"),
+            None => String::new(),
+        };
         lines.push(format!(
-            "  {} {} = {}{repo}",
+            "  {} {} = {}{source}",
             rule.kind.key(),
             rule.pattern,
             rule.mode.as_str()

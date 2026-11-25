@@ -95,14 +95,11 @@ pub(crate) async fn load_config(host: &Host, snapshot: &Snapshot) -> (Config, Ve
         (config::SETTING_SOURCE.to_owned(), setting.is_some()),
         (project_name, project.is_some()),
     ];
-    let mut sources: Vec<String> = layers
+    let sources = layers
         .into_iter()
         .filter(|(_, present)| *present)
         .map(|(name, _)| name)
         .collect();
-    if sources.is_empty() {
-        sources.push("defaults".to_owned());
-    }
     (config, sources)
 }
 

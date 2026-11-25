@@ -566,7 +566,7 @@ fn warnings_containing(host: &Host, text: &str) -> usize {
 #[tokio::test]
 async fn hidden_plan_tools_are_turned_back_on_with_one_warning() {
     let (mut host, _work, _agent) = read_only("hidden-helpers").await;
-    // The deferred extension's auto mode took them out of the active tools.
+    // A deferred rule took them out of the active tools.
     host.tools.push(common::tool("deferred_search"));
     host.active.retain(|name| !name.starts_with("plan_mode_"));
     host.command("start").await;

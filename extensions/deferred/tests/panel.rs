@@ -61,7 +61,7 @@ async fn panel_lists_everything_and_arrows_write_a_rule() {
     let (surface, lines) = (opened["surface"].clone(), text(&opened["lines"]));
     assert!(lines.contains("Deferred context"), "{lines}");
     assert!(
-        lines.contains("[Tools (4)] Skills (1) Context (1) Sections (1) Rules (1)"),
+        lines.contains("[Tools (4)] Skills (1) Context (1) Sections (1) Rules (2)"),
         "{lines}"
     );
     assert!(lines.contains("→ ● read on"), "{lines}");
@@ -111,11 +111,13 @@ async fn without_a_ui_the_command_prints_the_status() {
     host.drive(1, "command.run", params, |m, p| fake.answer(m, p))
         .await;
     let note = fake.calls_of("ui.notify").pop().unwrap();
+    let message = note["message"].as_str().unwrap();
     assert!(
-        note["message"]
-            .as_str()
-            .unwrap()
-            .starts_with("deferred config:"),
+        message.starts_with("deferred config: built-in defaults"),
+        "{note}"
+    );
+    assert!(
+        message.contains("tools plan_mode_* = on [built-in defaults]"),
         "{note}"
     );
 }

@@ -6,6 +6,7 @@ use serde_json::{Map, Value, json};
 
 pub const NAMESPACE: &str = "deferred";
 pub const FILE_NAME: &str = "deferred.json";
+pub const DEFAULT_RULE_SOURCE: &str = "built-in defaults";
 /// The source name of rules from the `deferred` setting.
 pub const SETTING_SOURCE: &str = "setting `deferred`";
 /// The key of repo-scoped rule blocks.
@@ -143,7 +144,13 @@ pub struct Layers<'a> {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            rules: Vec::new(),
+            rules: vec![Rule {
+                kind: Kind::Tool,
+                pattern: "plan_mode_*".to_owned(),
+                mode: Mode::On,
+                source: DEFAULT_RULE_SOURCE.to_owned(),
+                repo: None,
+            }],
             auto_percent: Some(DEFAULT_AUTO_PERCENT),
             max_results: DEFAULT_MAX_RESULTS,
             warnings: Vec::new(),

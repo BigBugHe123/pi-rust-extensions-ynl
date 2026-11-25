@@ -160,6 +160,9 @@ impl View {
                 rows::Why::Pinned(reason) => format!("{} cannot change here: {reason}.", row.name),
                 _ => format!("{} cannot change here.", row.name),
             },
+            Some(Entry::Rule(rule)) if rule.source == crate::config::DEFAULT_RULE_SOURCE => {
+                "To override this default, set a rule for the tool in the Tools tab.".to_owned()
+            }
             Some(Entry::Rule(rule)) => format!(
                 "This rule is in {}; edit that file to change it.",
                 rule.source

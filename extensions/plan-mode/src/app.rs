@@ -380,7 +380,7 @@ impl App {
     }
 
     /// Turns the Plan tools back on when something took them out of the active tools, for example
-    /// the deferred extension's `auto` mode. Returns the active tools afterwards, and whether it
+    /// a deferred rule that lists them by name. Returns the active tools afterwards, and whether it
     /// changed them.
     pub async fn ensure_helpers(&self, host: &Host, active: Vec<String>) -> (Vec<String>, bool) {
         if helpers_available(&active) {
@@ -402,7 +402,7 @@ impl App {
     pub async fn warn_helpers_restored(&self, host: &Host, tools: &[ToolInfo]) {
         let deferred = tools.iter().any(|t| t.name == DEFERRED_SEARCH);
         let fix = if deferred {
-            "The deferred extension lists tools by name only in its auto mode or with a names rule. To keep these two listed, add the rule \"plan_mode_*\": \"on\" to its tools."
+            "A deferred rule that matches them, such as \"*\": \"names\", lists them by name only. To keep these two listed, add the rule \"plan_mode_*\": \"on\" after it."
         } else {
             "Check the tool settings of other extensions if this happens again."
         };

@@ -233,6 +233,17 @@ fn pinned_items_and_file_rules_are_locked() {
             .1
             .contains("/a/ext/deferred.json")
     );
+    view.selected = inv
+        .rules
+        .iter()
+        .position(|r| r.pattern == "plan_mode_*")
+        .unwrap();
+    for width in [60, 80] {
+        let lines = view.render(&inv, width, Some(20)).join("\n");
+        assert!(style::strip(&lines).contains("plan_mode_*"), "{lines}");
+    }
+    assert_eq!(view.key(&Key::Enter, &inv), Action::Redraw);
+    assert!(view.status.as_ref().unwrap().1.contains("Tools tab"));
 }
 
 #[test]
