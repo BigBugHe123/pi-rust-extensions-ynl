@@ -7,10 +7,6 @@ repository.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
-[[bin]]
-name = "pi-ext-ssh"
-path = "src/main.rs"
-
 [dependencies]
 pi-ext-sdk = { path = "../../crates/pi-ext-sdk" }
 serde.workspace = true
