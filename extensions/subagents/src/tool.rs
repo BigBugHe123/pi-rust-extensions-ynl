@@ -115,8 +115,7 @@ pub fn child_cwd(cwd: &Path, rel: &str) -> std::result::Result<std::path::PathBu
                 dir.pop();
             }
             Component::CurDir => {}
-            Component::RootDir => dir.push(part.as_os_str()),
-            Component::Prefix(_) => dir = part.as_os_str().into(),
+            Component::RootDir | Component::Prefix(_) => dir = part.as_os_str().into(),
         }
     }
     let escapes = match (dir.canonicalize(), cwd.canonicalize()) {

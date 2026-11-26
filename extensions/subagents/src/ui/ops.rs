@@ -216,14 +216,7 @@ pub fn scope_dir(layers: &Layers, source: Source) -> Option<PathBuf> {
 /// The scope of a file: project when it is under the project agents dir.
 pub fn scope_of(layers: &Layers, file: &Path) -> Source {
     match &layers.project {
-        Some(project)
-            if file.starts_with(project)
-                || registry::legacy_project_agents_dirs(project)
-                    .iter()
-                    .any(|dir| file.starts_with(dir)) =>
-        {
-            Source::Project
-        }
+        Some(project) if file.starts_with(project) => Source::Project,
         _ => Source::Global,
     }
 }
