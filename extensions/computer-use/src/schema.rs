@@ -205,13 +205,13 @@ pub fn wait_for() -> ToolSpec {
 pub fn launch_browser() -> ToolSpec {
     ToolSpec::new(
         "launch_browser",
-        "Connect to an existing browser using its CDP debugging port, or launch the configured managed browser. If an external API returns connection information containing a port usable for CDP, pass that value as port.",
+        "Launch the configured Pi-managed CDP browser, or connect to a running browser on a local DevTools port, and return an observed browser-page state.",
     )
     .label("Launch Browser Context")
     .prompt_snippet("Use for browser work that needs a managed CDP context.")
     .guideline("Prefer curl through bash when the page is directly fetchable.")
     .parameters(object(
-        json!({ "url": { "type": "string", "maxLength": 8192 }, "port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "Optional CDP debugging port. If an external API returns connection information containing a port usable for CDP, pass that value here." } }),
+        json!({ "url": { "type": "string", "maxLength": 8192 }, "port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "DevTools port of a running browser on 127.0.0.1. Omit it to launch the managed browser." } }),
         &[],
     ))
 }

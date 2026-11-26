@@ -215,20 +215,27 @@ impl Live<'_> {
         if let Some(url) = url {
             check_url(url)?;
         }
-        let port = if let Some(port) = args.port {
-            port
-        } else {
-            self.ensure_browser().await?
+        let port = match args.port {
+            Some(port) => {
+                let version = cdp::get_json(port, "/json/version").await?;
+                if version["webSocketDebuggerUrl"].as_str().is_none() {
+                    return Err(Error::msg(format!(
+                        "Port {port} is not a DevTools endpoint."
+                    )));
+                }
+                // Replacing the record of a browser this extension started would kill it.
+                if page::port(self.rt) != Some(port) {
+                    *self.rt.browser() = Some(Managed {
+                        port,
+                        name: display_name(self.rt.config().managed_browser),
+                        pid: 0,
+                        child: None,
+                    });
+                }
+                port
+            }
+            None => self.ensure_browser().await?,
         };
-        if args.port.is_some() {
-            let _ = cdp::get_json(port, "/json/version").await?;
-            *self.rt.browser() = Some(Managed {
-                port,
-                name: display_name(self.rt.config().managed_browser),
-                pid: 0,
-                child: None,
-            });
-        }
         let roots = page::roots(self.rt).await?;
         let root = roots
             .into_iter()
@@ -239,7 +246,11 @@ impl Live<'_> {
         if let Some(url) = url {
             page::navigate(&target, url, self.cancel).await?;
         }
-        let summary = format!("Launched the managed browser on DevTools port {port}.");
+        let summary = if args.port.is_some() {
+            format!("Connected to the browser on DevTools port {port}.")
+        } else {
+            format!("Launched the managed browser on DevTools port {port}.")
+        };
         self.page_result("launch_browser", &summary, &target, None)
             .await
     }

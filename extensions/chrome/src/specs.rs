@@ -94,7 +94,7 @@ pub fn specs() -> Vec<ToolSpec> {
                 vec![
                     (
                         "port",
-                        json!({ "type": "number", "description": "Optional CDP debugging port. If an external API returns connection information containing a port usable for CDP, pass that value here." }),
+                        json!({ "type": "number", "description": "DevTools port of the Chrome to connect to. Defaults to the configured port." }),
                     ),
                     ("url", json!({ "type": "string" })),
                     ("userDataDir", json!({ "type": "string" })),
