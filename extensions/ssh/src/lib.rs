@@ -134,14 +134,14 @@ pub fn extension() -> Extension {
         }), &["profile"]), move |args: ProfileArgs, ctx: ToolCtx| {
             let state = use_profile.clone();
             async move {
-                ui::set_remote(&state, &ctx.host(), Some(args.profile.clone())).await?;
+                ui::set_remote(&state, ctx.host(), Some(args.profile.clone())).await?;
                 Ok(ToolResult::text(format!("This session's bash now uses SSH profile '{}'. Subsequent bash commands will run remotely.", args.profile)))
             }
         })
         .tool(tool("ssh_use_local_bash", "Route this session's built-in bash back to the local machine. Use when the user asks to disconnect or return to local commands.", json!({}), &[]), move |_args: Value, ctx: ToolCtx| {
             let state = use_local.clone();
             async move {
-                ui::set_remote(&state, &ctx.host(), None).await?;
+                ui::set_remote(&state, ctx.host(), None).await?;
                 Ok(ToolResult::text("This session's bash now runs locally."))
             }
         })

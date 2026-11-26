@@ -34,8 +34,8 @@ pub fn socket_path(agent_dir: &Path, profile: &Profile) -> Result<PathBuf> {
     Ok(directory.join(format!("{hash:016x}")))
 }
 
-pub fn arguments(agent_dir: &Path, _config: &Config, profile: &Profile) -> Result<Vec<String>> {
-    let _socket = socket_path(agent_dir, profile)?;
+pub fn arguments(agent_dir: &Path, config: &Config, profile: &Profile) -> Result<Vec<String>> {
+    let socket = socket_path(agent_dir, profile)?;
     let mut args = vec![
         "-T".into(),
         "-o".into(),
@@ -45,18 +45,20 @@ pub fn arguments(agent_dir: &Path, _config: &Config, profile: &Profile) -> Resul
         "-p".into(),
         profile.port.to_string(),
     ];
-    #[cfg(not(windows))]
-    args.extend([
-        "-o".into(),
-        "ControlMaster=auto".into(),
-        "-o".into(),
-        format!("ControlPersist={}", _config.control_persist),
-        "-o".into(),
-        format!(
-            "ControlPath={}",
-            _socket.file_name().unwrap().to_string_lossy()
-        ),
-    ]);
+    // Windows OpenSSH has no client ControlMaster support.
+    if !cfg!(windows) {
+        args.extend([
+            "-o".into(),
+            "ControlMaster=auto".into(),
+            "-o".into(),
+            format!("ControlPersist={}", config.control_persist),
+            "-o".into(),
+            format!(
+                "ControlPath={}",
+                socket.file_name().unwrap().to_string_lossy()
+            ),
+        ]);
+    }
     for (flag, value) in [
         ("-l", &profile.user),
         ("-i", &profile.identity_file),
