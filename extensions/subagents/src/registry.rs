@@ -17,6 +17,20 @@ pub fn project_agents_dir(project_base: &Path) -> PathBuf {
     pi_ext_sdk::paths::project_path(project_base, "ext/subagents/agents")
 }
 
+fn legacy_global_agents_dir(native_global: &Path) -> Option<PathBuf> {
+    native_global
+        .ancestors()
+        .nth(3)
+        .map(|base| base.join("agents"))
+}
+
+pub(crate) fn legacy_project_agents_dirs(native_project: &Path) -> Vec<PathBuf> {
+    let Some(pi_dir) = native_project.ancestors().nth(3) else {
+        return Vec::new();
+    };
+    vec![pi_dir.join("agents")]
+}
+
 #[derive(Debug, Clone)]
 pub struct Layers {
     pub global: PathBuf,

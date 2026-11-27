@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use crate::outline::Node;
 use crate::platform::linux::{self, Capturer};
 use crate::platform::run::{helper_result, run, run_ok};
-use crate::platform::{Cmd, Step, jpeg_size, macos};
+use crate::platform::{Cmd, Step, jpeg_size, macos, windows};
 use crate::state::{Root, Target};
 
 const SHORT: Duration = Duration::from_secs(15);
@@ -26,6 +26,7 @@ pub struct Image {
 pub enum Kind {
     MacOs { helper: PathBuf },
     Linux { capturer: Option<Capturer> },
+    Windows,
 }
 
 #[derive(Debug, Clone)]
@@ -41,12 +42,15 @@ fn target_json(target: &Target) -> Value {
 
 impl Backend {
     pub async fn helper(&self, command: &str, args: Value) -> Result<Value> {
-        let Kind::MacOs { helper } = &self.kind else {
-            return Err(Error::msg(
-                "The macOS helper is not available on this platform.",
-            ));
+        let cmd = match &self.kind {
+            Kind::MacOs { helper } => macos::helper(helper, command, &args),
+            Kind::Windows | Kind::Linux { .. } => {
+                return Err(Error::msg(
+                    "No desktop helper is available on this platform.",
+                ));
+            }
         };
-        let output = run(&macos::helper(helper, command, &args), LONG, &self.cancel).await?;
+        let output = run(&cmd, LONG, &self.cancel).await?;
         helper_result(&output.stdout)
     }
 
@@ -62,6 +66,9 @@ impl Backend {
                 .into_iter()
                 .filter_map(|w| serde_json::from_value(w).ok())
                 .collect());
+        }
+        if matches!(self.kind, Kind::Windows) {
+            return windows::windows();
         }
         let active = self
             .text(linux::active_window())
@@ -104,7 +111,7 @@ impl Backend {
     }
 
     pub async fn outline(&self, target: &Target, max_depth: u32, max_nodes: u32) -> Result<Node> {
-        if matches!(self.kind, Kind::Linux { .. }) {
+        if matches!(self.kind, Kind::Linux { .. } | Kind::Windows) {
             return Ok(picture_root(target));
         }
         let mut args = target_json(target);
@@ -148,6 +155,7 @@ impl Backend {
                 let cmd = linux::capture(*capturer, target.window_id, &target.frame_points, &jpeg);
                 run_ok(&cmd, SHORT, &self.cancel).await?;
             }
+            Kind::Windows => windows::capture(target, &jpeg)?,
         }
         let bytes = std::fs::read(&jpeg);
         let _ = std::fs::remove_file(&jpeg);
@@ -177,6 +185,10 @@ impl Backend {
 
     /// Lifts the mouse button and modifiers with a fresh token so cancel does not skip it.
     pub async fn release(&self) {
+        if matches!(self.kind, Kind::Windows) {
+            windows::release();
+            return;
+        }
         let fresh = CancellationToken::new();
         let cmd = match &self.kind {
             Kind::MacOs { helper } => macos::helper(
@@ -185,6 +197,7 @@ impl Backend {
                 &macos::act_args(&json!({}), &[Step::Release]),
             ),
             Kind::Linux { .. } => linux::release(),
+            Kind::Windows => unreachable!(),
         };
         let _ = run(&cmd, RELEASE, &fresh).await;
     }
@@ -195,6 +208,9 @@ impl Backend {
                 .helper("act", macos::act_args(&target_json(target), steps))
                 .await?;
             return Ok(result["steps"].as_array().cloned().unwrap_or_default());
+        }
+        if matches!(self.kind, Kind::Windows) {
+            return Ok(windows::act(target, steps));
         }
         let mut outcomes = Vec::new();
         for (index, step) in steps.iter().enumerate() {

@@ -1,6 +1,7 @@
 pub mod linux;
 pub mod macos;
 pub mod run;
+pub mod windows;
 
 use crate::outline::Rect;
 
@@ -8,6 +9,7 @@ use crate::outline::Rect;
 pub enum Os {
     Mac,
     Linux { wayland: bool },
+    Windows,
     Unsupported(&'static str),
 }
 
@@ -17,13 +19,14 @@ pub fn detect() -> Os {
         "linux" => Os::Linux {
             wayland: std::env::var_os("WAYLAND_DISPLAY").is_some(),
         },
+        "windows" => Os::Windows,
         other => Os::Unsupported(other),
     }
 }
 
 pub fn unsupported_message(os: &str) -> String {
     format!(
-        "pi-computer-use does not support {os} in pi-rust. Supported platforms: macOS (screencapture and a Swift helper) and Linux (xdotool, with grim, maim, or ImageMagick import for screenshots)."
+        "pi-computer-use does not support {os} in pi-rust. Supported platforms: Windows, macOS, and Linux."
     )
 }
 

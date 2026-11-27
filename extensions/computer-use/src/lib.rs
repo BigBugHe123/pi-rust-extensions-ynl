@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 use std::future::Future;
 use std::process::ExitCode;
 use std::sync::Arc;

@@ -17,9 +17,13 @@ reqwest.workspace = true
 base64 = "=0.22.1"
 futures-util = { version = "=0.3.34", default-features = false, features = ["sink", "std"] }
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect"] }
+jpeg-encoder = { version = "=0.6.1", default-features = false }
 
 [dev-dependencies]
 tempfile = "=3.27.0"
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

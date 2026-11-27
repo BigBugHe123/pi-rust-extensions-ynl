@@ -201,8 +201,8 @@ impl Live<'_> {
         let backend = self.desktop().await?;
         let mut root = backend.outline(target, 24, 1500).await?;
         root.assign_refs(&mut 0);
-        let linux = matches!(backend.kind, Kind::Linux { .. });
-        let image = if mode != "semantic" || linux {
+        let screenshot_only = matches!(backend.kind, Kind::Linux { .. } | Kind::Windows);
+        let image = if mode != "semantic" || screenshot_only {
             Some(backend.capture(target).await?)
         } else {
             None

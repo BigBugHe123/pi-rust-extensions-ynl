@@ -40,6 +40,7 @@ The first tool that operates the desktop starts setup.
 - macOS: the extension builds a Swift helper with `xcrun swiftc` one time. The binary goes in `<agentDir>/ext/computer-use/helper-<hash>/`. If `swiftc` is missing, the menu can start `xcode-select --install`.
 - macOS: the helper does a check of Accessibility and Screen Recording. If a permission is missing, the extension asks macOS to show its prompts. Then it shows a menu with "Open Accessibility Settings (missing)", "Open Screen Recording Settings (missing)", "Recheck (restarts helper)", and "Cancel". macOS gives the permission to the app that runs pi, for example your terminal.
 - Linux: the extension needs `xdotool`. For screenshots it uses `grim` (Wayland), `maim`, or ImageMagick `import`.
+- Windows: the extension uses Win32 window enumeration, GDI screen capture, and native keyboard/mouse input APIs directly.
 - If pi has no UI and a permission is missing, the tool gives an error that tells you to start pi in interactive mode.
 
 ## Platforms
@@ -48,7 +49,7 @@ The first tool that operates the desktop starts setup.
 | --- | --- | --- | --- |
 | macOS | `CGWindowList` and the Accessibility tree, through the helper | `screencapture -l<windowId>`, then `sips` to JPEG (a maximum of 1280 pixels) | Accessibility actions (`press`, `setText`, `focus`) and `CGEvent` pointer and keyboard events |
 | Linux | `xdotool`; the outline is one `pictureOnly` window node | `grim`, `maim`, or `import` | `xdotool` |
-| Windows | Not supported | Not supported | Not supported |
+| Windows | Win32 visible-window enumeration; the outline is one `pictureOnly` window node | GDI screen capture to JPEG (a maximum of 1280 pixels) | Win32 `SendInput` |
 | Managed browser (all platforms) | DOM outline through the DevTools Protocol | `Page.captureScreenshot` | DevTools `Input.*` events and element `click`, `focus`, and value set |
 
 If an action fails or stops, the extension releases the mouse button and the modifier keys.
@@ -87,7 +88,7 @@ When pi shuts down the extension, the extension stops the browser that it starte
 - The macOS helper is a Swift program that the extension builds on your Mac. Upstream ships a signed `pi-computer-use.app`.
 - The extension does no OCR. `visual` and `fused` both send the screenshot.
 - Linux has no AT-SPI outline. Use coordinate actions from the screenshot.
-- Windows is not supported.
+- Windows has no accessibility tree in this extension; use coordinate actions from the screenshot.
 - The extension does not draw a cursor overlay.
 - `act_ui` does not try foreground keyboard input again after a failed background attempt.
 - Config paths follow the pi-rust convention (`ext/computer-use.json`). Upstream uses `extensions/pi-computer-use.json` and `.pi/computer-use.json`.

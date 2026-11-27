@@ -116,6 +116,7 @@ pub async fn ensure_ready(host: &Host, cancel: &CancellationToken) -> Result<Bac
         Os::Mac => Kind::MacOs {
             helper: ensure_helper(host, &state_dir(host), cancel).await?,
         },
+        Os::Windows => Kind::Windows,
     };
     let backend = Backend {
         kind,
