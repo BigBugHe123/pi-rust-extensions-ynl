@@ -229,7 +229,8 @@ impl Footer {
     }
 
     pub async fn render(self: &Arc<Self>, host: &Host) {
-        if !is_tui(host) {
+        let terminal = is_tui(host);
+        if !terminal && !is_rpc(host) {
             return;
         }
         if let Some(snapshot) = host.snapshot() {
@@ -249,6 +250,7 @@ impl Footer {
                 Some(StatusLineConfig::Builtin(builtin)) => {
                     Some(render_builtin(&builtin, &snapshot, width))
                 }
+                Some(StatusLineConfig::Command(_)) if !terminal => None,
                 Some(StatusLineConfig::Command(config)) => {
                     let command = &config;
                     let key = (status_payload(&snapshot).to_string(), width);
@@ -288,10 +290,10 @@ impl Footer {
                 }
             }
         };
-        self.send(host, lines).await;
+        self.send(host, lines, terminal).await;
     }
 
-    async fn send(&self, host: &Host, lines: Option<Vec<String>>) {
+    async fn send(&self, host: &Host, lines: Option<Vec<String>>, terminal: bool) {
         let unchanged = {
             let mut state = self.lock();
             let current = lines.clone().unwrap_or_default();
@@ -306,15 +308,25 @@ impl Footer {
         if unchanged {
             return;
         }
-        let result = match lines {
-            Some(lines) => host.set_footer(lines).await,
-            None => host.clear_footer().await,
+        let result = match (terminal, lines) {
+            (true, Some(lines)) => host.set_footer(lines).await,
+            (true, None) => host.clear_footer().await,
+            (false, Some(lines)) => {
+                host.set_widget("statusline", lines, Placement::BelowEditor)
+                    .await
+            }
+            (false, None) => host.clear_widget("statusline").await,
         };
         if let Err(error) = result {
             pi_ext_sdk::warn!("statusline: footer update failed: {error:?}");
             self.forget_sent();
         }
     }
+}
+
+fn is_rpc(host: &Host) -> bool {
+    host.snapshot()
+        .is_some_and(|snapshot| snapshot.mode.as_deref() == Some("rpc") && snapshot.has_ui)
 }
 
 /// pi loads extensions before it binds the UI, so `initialize` reports the load-time mode;
